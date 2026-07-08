@@ -4,6 +4,8 @@ Kinect v1 (Xbox 360 / Kinect for Windows) support for Linux.
 
 **License:** MIT
 
+![Kinect for Linux Preview](docs/preview.png)
+
 ## Features
 
 - **Daemon (k4wd)** — Owns the real Kinect USB device, serves depth/video/audio to other apps

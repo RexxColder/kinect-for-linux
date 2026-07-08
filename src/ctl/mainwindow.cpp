@@ -190,7 +190,7 @@ static QImage depthToJET(const uint16_t *raw, int w, int h) {
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), m_recording(false), m_cameraMode(0) {
     setupUI();
-    setWindowTitle("Kinect for Linux v1.0");
+    setWindowTitle("Kinect for Linux");
     {
         QIcon icon;
         for (int sz : {16, 22, 24, 32, 48, 64, 128, 256, 512}) {
@@ -777,170 +777,180 @@ void MainWindow::onRecordToggle() {
     }
 }
 
-/* ─── UI Setup (matching design mockup) ───────────────── */
+/* ─── UI Setup (new dashboard style) ─────────────────── */
 void MainWindow::setupUI() {
     QWidget *central = new QWidget;
     setCentralWidget(central);
+
+    /* Global dark theme */
+    setStyleSheet(
+        "QMainWindow { background: #16181c; }"
+        "QWidget { color: #e8e8e6; font-family: -apple-system, 'Segoe UI', Arial, sans-serif; font-size: 13px; }"
+        "QLabel { background: transparent; }"
+        "QComboBox { background: #1a1c20; color: #e8e8e6; border: 0.5px solid #3a3d42; border-radius: 6px; padding: 8px; }"
+        "QComboBox::drop-down { border: none; width: 20px; }"
+        "QComboBox QAbstractItemView { background: #1a1c20; color: #e8e8e6; selection-background-color: #3a3d42; border: 0.5px solid #3a3d42; }"
+        "QPushButton { background: transparent; border: 0.5px solid #3a3d42; color: #e8e8e6; border-radius: 6px; padding: 7px 14px; font-size: 13px; }"
+        "QPushButton:hover { background: #2a2d33; }"
+        "QPushButton:pressed { background: #1a1c20; }"
+        "QPushButton:disabled { background: #1a1c20; color: #5a5a56; }"
+        "QSlider::groove:horizontal { background: #3a3d42; height: 4px; border-radius: 2px; }"
+        "QSlider::handle:horizontal { background: #185fa5; width: 14px; height: 14px; margin: -5px; border-radius: 7px; }"
+        "QSlider::sub-page:horizontal { background: #185fa5; border-radius: 2px; }"
+        "QSlider::groove:vertical { background: #3a3d42; width: 4px; border-radius: 2px; }"
+        "QSlider::handle:vertical { background: #185fa5; width: 14px; height: 14px; margin: -5px; border-radius: 7px; }"
+        "QSlider::sub-page:vertical { background: #185fa5; border-radius: 2px; }"
+        "QCheckBox { color: #e8e8e6; }"
+        "QCheckBox::indicator { width: 16px; height: 16px; }"
+        "QCheckBox::indicator:unchecked { background: #1a1c20; border: 0.5px solid #3a3d42; border-radius: 3px; }"
+        "QCheckBox::indicator:checked { background: #185fa5; border: 1px solid #185fa5; border-radius: 3px; }"
+    );
+
     QVBoxLayout *root = new QVBoxLayout(central);
-    root->setContentsMargins(10, 10, 10, 10);
-    root->setSpacing(6);
+    root->setContentsMargins(24, 24, 24, 24);
+    root->setSpacing(0);
 
-    /* ═══ Title Bar ═══ */
-    QHBoxLayout *titleRow = new QHBoxLayout;
-    titleRow->setSpacing(8);
+    /* ═══ App Container ═══ */
+    QWidget *appContainer = new QWidget;
+    appContainer->setStyleSheet("background: #1e2126; border-radius: 12px;");
+    QVBoxLayout *appLayout = new QVBoxLayout(appContainer);
+    appLayout->setContentsMargins(24, 24, 24, 24);
+    appLayout->setSpacing(20);
 
-    /* Green/Red status dot */
+    /* ═══ Top Bar (status) ═══ */
+    QHBoxLayout *topbar = new QHBoxLayout;
+    topbar->setSpacing(0);
+
+    /* Left: icon + status text */
+    QHBoxLayout *statusRow = new QHBoxLayout;
+    statusRow->setSpacing(10);
+
     m_statusDot = new QLabel;
-    m_statusDot->setFixedSize(14, 14);
-    m_statusDot->setStyleSheet("background:#a6e3a1; border:2px solid #40a02b; border-radius:8px;");
+    m_statusDot->setFixedSize(28, 28);
+    m_statusDot->setPixmap(QPixmap("/home/rexx/Proyectos/kinect-for-linux/icons/kinection-enabled.png")
+        .scaled(28, 28, Qt::KeepAspectRatio, Qt::SmoothTransformation));
 
-    m_statusText = new QLabel("Daemon Corriendo - Todo OK");
-    m_statusText->setStyleSheet("color:#a6e3a1; font-size:11px; font-weight:bold;");
+    m_statusText = new QLabel("Daemon corriendo — todo OK");
+    m_statusText->setStyleSheet("font-size: 15px; font-weight: 600; background: transparent;");
 
-    titleRow->addWidget(m_statusDot);
-    titleRow->addWidget(m_statusText);
-    titleRow->addStretch();
+    statusRow->addWidget(m_statusDot);
+    statusRow->addWidget(m_statusText);
+    topbar->addLayout(statusRow);
+    topbar->addStretch();
 
-    /* Iniciar Daemon button */
-    m_startDaemonBtn = new QPushButton("Conectar a Daemon");
-    m_startDaemonBtn->setStyleSheet(
-        "QPushButton { background:#a6e3a1; color:#1e1e2e; border:1px solid #40a02b; "
-        "border-radius:6px; padding:6px 14px; font-size:11px; font-weight:bold; }"
-        "QPushButton:hover { background:#94d67a; }"
-        "QPushButton:pressed { background:#74c76a; }");
+    /* Right: badge + buttons */
+    QLabel *badge = new QLabel("Conectado");
+    badge->setStyleSheet("background: rgba(99,153,34,0.18); color: #97c459; border-radius: 6px; padding: 5px 12px; font-size: 12px;");
+    topbar->addWidget(badge);
+
+    topbar->addSpacing(8);
+
+    m_startDaemonBtn = new QPushButton("Conectar");
+    m_startDaemonBtn->setVisible(false);
     connect(m_startDaemonBtn, &QPushButton::clicked, this, &MainWindow::onStartDaemon);
-    titleRow->addWidget(m_startDaemonBtn);
+    topbar->addWidget(m_startDaemonBtn);
 
-    /* Reset Daemon button */
-    m_resetDaemonBtn = new QPushButton("Reset Daemon");
+    m_resetDaemonBtn = new QPushButton("Reset daemon");
     m_resetDaemonBtn->setStyleSheet(
-        "QPushButton { background:#f38ba8; color:#1e1e2e; border:1px solid #e64553; "
-        "border-radius:6px; padding:6px 14px; font-size:11px; font-weight:bold; }"
-        "QPushButton:hover { background:#e06a8a; }"
-        "QPushButton:pressed { background:#d05a7a; }");
+        "QPushButton { border-color: #a32d2d; color: #e88; }"
+        "QPushButton:hover { background: rgba(163,45,45,0.2); }");
     connect(m_resetDaemonBtn, &QPushButton::clicked, this, &MainWindow::onResetDaemon);
-    titleRow->addWidget(m_resetDaemonBtn);
+    topbar->addWidget(m_resetDaemonBtn);
 
-    root->addLayout(titleRow);
+    appLayout->addLayout(topbar);
 
-    /* ═══ Main 3-Column Layout ═══ */
-    QHBoxLayout *mainRow = new QHBoxLayout;
-    mainRow->setSpacing(10);
+    /* ═══ Main Grid: 210px | 1fr | 230px ═══ */
+    QHBoxLayout *grid = new QHBoxLayout;
+    grid->setSpacing(16);
 
-    /* ── Left Column: Camera Mode Dropdown ── */
-    QVBoxLayout *leftCol = new QVBoxLayout;
-    leftCol->setSpacing(6);
+    /* ── Left Column (210px): Camera + Mic ── */
+    QWidget *leftPanel = new QWidget;
+    leftPanel->setFixedWidth(210);
+    QVBoxLayout *leftCol = new QVBoxLayout(leftPanel);
+    leftCol->setContentsMargins(0, 0, 0, 0);
+    leftCol->setSpacing(14);
 
-    QLabel *modeLabel = new QLabel("Lista Desplegable");
-    modeLabel->setStyleSheet("font-weight:bold; font-size:11px; color:#cdd6f4;");
-    leftCol->addWidget(modeLabel);
+    /* Camera dropdown */
+    QLabel *camLabel = new QLabel("Cámara");
+    camLabel->setStyleSheet("font-size: 12px; color: #9a9a96;");
+    leftCol->addWidget(camLabel);
 
     m_modeCombo = new QComboBox;
     m_modeCombo->addItems({
-        "Ver Cámara (RGB, Seleccionada)",
+        "Ver cámara (RGB)",
         "Cámara IR",
         "Cámara Depth",
         "Supercam (Overlay)"
     });
-    m_modeCombo->setMinimumWidth(180);
-    m_modeCombo->setStyleSheet(
-        "QComboBox { background:#313244; color:#cdd6f4; border:1px solid #585b70; "
-        "border-radius:4px; padding:6px 10px; font-size:11px; }"
-        "QComboBox::drop-down { border:none; width:20px; }"
-        "QComboBox QAbstractItemView { background:#313244; color:#cdd6f4; "
-        "selection-background-color:#585b70; border:1px solid #585b70; }");
     connect(m_modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onModeChanged);
     leftCol->addWidget(m_modeCombo);
 
-    /* ═══ Microphone Section ═══ */
-    QGroupBox *micBox = new QGroupBox("Micrófono");
-    micBox->setStyleSheet(
-        "QGroupBox { color:#cdd6f4; border:1px solid #45475a; border-radius:6px; "
-        "margin-top:8px; padding-top:14px; font-weight:bold; font-size:11px; }"
-        "QGroupBox::title { subcontrol-origin:margin; left:10px; padding:0 4px; }");
+    /* Microphone panel */
+    QWidget *micPanel = new QWidget;
+    micPanel->setStyleSheet("background: #24272d; border: 0.5px solid #33363c; border-radius: 8px; padding: 14px;");
+    QVBoxLayout *micLayout = new QVBoxLayout(micPanel);
+    micLayout->setContentsMargins(14, 14, 14, 14);
+    micLayout->setSpacing(8);
+
+    /* Mic title row with status dot */
+    QHBoxLayout *micTitleRow = new QHBoxLayout;
+    QLabel *micTitle = new QLabel("Micrófono");
+    micTitle->setStyleSheet("font-size: 13px; font-weight: 600; background: transparent;");
+    micTitleRow->addWidget(micTitle);
+    micTitleRow->addStretch();
 
     m_audioStatusDot = new QLabel;
-    m_audioStatusDot->setFixedSize(12, 12);
-    m_audioStatusDot->setStyleSheet("background:transparent; border:2px solid #a6e3a1; border-radius:6px;");
-    QVBoxLayout *micLayout = new QVBoxLayout;
+    m_audioStatusDot->setFixedSize(10, 10);
+    m_audioStatusDot->setStyleSheet("background:transparent; border: 1.5px solid #97c459; border-radius: 5px;");
+    micTitleRow->addWidget(m_audioStatusDot);
+    micLayout->addLayout(micTitleRow);
 
-    /* Audio status row */
-    QHBoxLayout *audioStatusRow = new QHBoxLayout;
-    QLabel *audioStatusLabel = new QLabel("Estado");
-    audioStatusLabel->setStyleSheet("font-size:10px; color:#a6adc8;");
-    audioStatusRow->addWidget(audioStatusLabel);
-    audioStatusRow->addStretch();
-    audioStatusRow->addWidget(m_audioStatusDot);
-    micLayout->addLayout(audioStatusRow);
-    micLayout->setSpacing(6);
-
-    /* Waveform visualization */
+    /* Waveform */
     m_waveform = new QLabel;
-    m_waveform->setFixedHeight(60);
-    m_waveform->setMinimumWidth(160);
-    m_waveform->setStyleSheet("background:#181825; border:1px solid #45475a; border-radius:4px;");
-    m_waveform->setPixmap(QPixmap(160, 60));
+    m_waveform->setFixedHeight(40);
+    m_waveform->setStyleSheet("background: #1a1c20; border-radius: 4px;");
+    m_waveform->setPixmap(QPixmap(180, 40));
     micLayout->addWidget(m_waveform);
 
-    /* Volume slider */
+    /* Volume */
     QHBoxLayout *volRow = new QHBoxLayout;
-    QLabel *volIcon = new QLabel("Vol");
-    volIcon->setStyleSheet("font-size:10px; color:#a6adc8;");
-    volRow->addWidget(volIcon);
-
     m_volSlider = new QSlider(Qt::Horizontal);
     m_volSlider->setRange(0, 100);
     m_volSlider->setValue(80);
-    m_volSlider->setStyleSheet(
-        "QSlider::groove:horizontal { background:#45475a; height:6px; border-radius:3px; }"
-        "QSlider::handle:horizontal { background:#a6e3a1; width:16px; height:16px; "
-        "margin:-5px; border-radius:8px; border:2px solid #40a02b; }"
-        "QSlider::sub-page:horizontal { background:#a6e3a1; border-radius:3px; }");
     volRow->addWidget(m_volSlider, 1);
-
     m_volLabel = new QLabel("80%");
     m_volLabel->setFixedWidth(36);
-    m_volLabel->setStyleSheet("font-size:10px; color:#cdd6f4; font-family:monospace;");
+    m_volLabel->setStyleSheet("font-size: 12px; color: #9a9a96;");
     volRow->addWidget(m_volLabel);
     micLayout->addLayout(volRow);
 
-    /* Test microphone checkbox */
-    m_micTestCheck = new QCheckBox("Probar Micrófono");
-    m_micTestCheck->setStyleSheet(
-        "QCheckBox { color:#cdd6f4; font-size:11px; }"
-        "QCheckBox::indicator { width:16px; height:16px; }"
-        "QCheckBox::indicator:unchecked { background:#313244; border:1px solid #585b70; border-radius:3px; }"
-        "QCheckBox::indicator:checked { background:#a6e3a1; border:1px solid #40a02b; border-radius:3px; }");
+    /* Test checkbox */
+    m_micTestCheck = new QCheckBox("Probar micrófono");
     micLayout->addWidget(m_micTestCheck);
 
-    /* Status label */
-    m_micStatusLabel = new QLabel("Estado: verificando...");
-    m_micStatusLabel->setStyleSheet("font-size:10px; color:#a6adc8;");
+    /* Status */
+    m_micStatusLabel = new QLabel("Estado: audio OK");
+    m_micStatusLabel->setStyleSheet("font-size: 12px; color: #97c459;");
     micLayout->addWidget(m_micStatusLabel);
 
     /* Bind button */
-    m_micBindBtn = new QPushButton("Bind Audio Driver");
+    m_micBindBtn = new QPushButton("Bind audio driver");
     m_micBindBtn->setStyleSheet(
-        "QPushButton { background:#89b4fa; color:#1e1e2e; border:1px solid #74c7ec; "
-        "border-radius:6px; padding:6px 12px; font-size:11px; font-weight:bold; }"
-        "QPushButton:hover { background:#74c7ec; }"
-        "QPushButton:disabled { background:#45475a; color:#585b70; }");
+        "QPushButton { background: #185fa5; border: none; color: white; }"
+        "QPushButton:hover { background: #1a6fbf; }");
     connect(m_micBindBtn, &QPushButton::clicked, this, [this]() {
         m_micBindBtn->setEnabled(false);
         m_micBindBtn->setText("Bindiendo...");
         m_micStatusLabel->setText("Re-bindando driver...");
-        m_micStatusLabel->setStyleSheet("font-size:10px; color:#f9e2af;");
-        /* Yellow dot while binding */
-        m_audioStatusDot->setStyleSheet("background:#f9e2af; border:2px solid #df8e1d; border-radius:6px;");
+        m_micStatusLabel->setStyleSheet("font-size: 12px; color: #f9e2af;");
+        m_audioStatusDot->setStyleSheet("background: #f9e2af; border: 1.5px solid #df8e1d; border-radius: 5px;");
         QProcess::execute("pkexec", {"bash", "-c",
             "echo 1-6.1:1.2 > /sys/bus/usb/drivers/snd-usb-audio/bind 2>/dev/null; "
             "echo 1-6.1:1.3 > /sys/bus/usb/drivers/snd-usb-audio/bind 2>/dev/null"});
-        /* Cooldown 3s */
         QTimer::singleShot(3000, this, [this]() {
             m_micBindBtn->setEnabled(true);
-            m_micBindBtn->setText("Bind Audio Driver");
-            /* Check if card appeared */
+            m_micBindBtn->setText("Bind audio driver");
             bool found = false;
             for (int c = 0; c < 10; c++) {
                 QFile f(QString("/proc/asound/card%1/usbid").arg(c));
@@ -950,19 +960,213 @@ void MainWindow::setupUI() {
                 }
             }
             if (found) {
-                m_micStatusLabel->setText("Estado: Kinect Audio OK");
-                m_micStatusLabel->setStyleSheet("font-size:10px; color:#a6e3a1;");
+                m_micStatusLabel->setText("Estado: audio OK");
+                m_micStatusLabel->setStyleSheet("font-size: 12px; color: #97c459;");
+                m_audioStatusDot->setStyleSheet("background:transparent; border: 1.5px solid #97c459; border-radius: 5px;");
             } else {
                 m_micStatusLabel->setText("Estado: NO encontrado");
-                m_micStatusLabel->setStyleSheet("font-size:10px; color:#f38ba8;");
+                m_micStatusLabel->setStyleSheet("font-size: 12px; color: #e88;");
+                m_audioStatusDot->setStyleSheet("background: #e88; border: 1.5px solid #a32d2d; border-radius: 5px;");
             }
             updateStatusDots();
         });
     });
     micLayout->addWidget(m_micBindBtn);
 
-    micBox->setLayout(micLayout);
-    leftCol->addWidget(micBox);
+    leftCol->addWidget(micPanel);
+    leftCol->addStretch();
+    grid->addWidget(leftPanel);
+
+    /* ── Center Column: Camera View ── */
+    QWidget *centerPanel = new QWidget;
+    QVBoxLayout *centerCol = new QVBoxLayout(centerPanel);
+    centerCol->setContentsMargins(0, 0, 0, 0);
+    centerCol->setSpacing(8);
+
+    QLabel *viewTitle = new QLabel("Vista de cámara principal");
+    viewTitle->setStyleSheet("font-size: 13px; font-weight: 600; background: transparent;");
+    centerCol->addWidget(viewTitle);
+
+    m_mainView = new QLabel;
+    m_mainView->setMinimumSize(400, 300);
+    m_mainView->setAlignment(Qt::AlignCenter);
+    m_mainView->setStyleSheet(
+        "background: #14161a; border: 0.5px solid #33363c; border-radius: 8px; color: #5a5a56; font-size: 14px;");
+    m_mainView->setText("Sin conexión");
+    centerCol->addWidget(m_mainView, 1);
+
+    /* Capture buttons */
+    QHBoxLayout *btnRow = new QHBoxLayout;
+    btnRow->setSpacing(8);
+
+    m_captureBtn = new QPushButton("Capturar foto");
+    connect(m_captureBtn, &QPushButton::clicked, this, &MainWindow::onCapturePhoto);
+    btnRow->addWidget(m_captureBtn);
+
+    m_recordBtn = new QPushButton("Grabar video");
+    connect(m_recordBtn, &QPushButton::clicked, this, &MainWindow::onRecordToggle);
+    btnRow->addWidget(m_recordBtn);
+
+    m_stopBtn = new QPushButton("Detener");
+    m_stopBtn->setStyleSheet("QPushButton { border-color: #a32d2d; color: #e88; }");
+    m_stopBtn->setVisible(false);
+    connect(m_stopBtn, &QPushButton::clicked, this, &MainWindow::onRecordToggle);
+    btnRow->addWidget(m_stopBtn);
+
+    m_timerLabel = new QLabel("00:00:00");
+    m_timerLabel->setStyleSheet("font-size: 13px; font-family: monospace; color: #9a9a96; background: transparent;");
+    btnRow->addWidget(m_timerLabel);
+    btnRow->addStretch();
+    centerCol->addLayout(btnRow);
+
+    grid->addWidget(centerPanel, 1);
+
+    /* ── Right Column (230px): Motor Control ── */
+    QWidget *rightPanel = new QWidget;
+    rightPanel->setFixedWidth(230);
+    QVBoxLayout *rightCol = new QVBoxLayout(rightPanel);
+    rightCol->setContentsMargins(0, 0, 0, 0);
+    rightCol->setSpacing(0);
+
+    /* Motor panel */
+    QWidget *motorPanel = new QWidget;
+    motorPanel->setStyleSheet("background: #24272d; border: 0.5px solid #33363c; border-radius: 8px; padding: 14px;");
+    QVBoxLayout *motorLayout = new QVBoxLayout(motorPanel);
+    motorLayout->setContentsMargins(14, 14, 14, 14);
+    motorLayout->setSpacing(6);
+
+    /* Title row with status dot */
+    QHBoxLayout *motorTitleRow = new QHBoxLayout;
+    QLabel *motorTitle = new QLabel("Control de movimiento");
+    motorTitle->setStyleSheet("font-size: 13px; font-weight: 600; background: transparent;");
+    motorTitleRow->addWidget(motorTitle);
+    motorTitleRow->addStretch();
+    m_motorStatusDot = new QLabel;
+    m_motorStatusDot->setFixedSize(10, 10);
+    m_motorStatusDot->setStyleSheet("background:transparent; border: 1.5px solid #97c459; border-radius: 5px;");
+    motorTitleRow->addWidget(m_motorStatusDot);
+    motorLayout->addLayout(motorTitleRow);
+
+    QLabel *motorSub = new QLabel("Kinect motor");
+    motorSub->setStyleSheet("font-size: 12px; color: #9a9a96; background: transparent;");
+    motorLayout->addWidget(motorSub);
+
+    /* Icon + Slider row: [degrees] [icon] [slider] */
+    QHBoxLayout *iconSliderRow = new QHBoxLayout;
+    iconSliderRow->setSpacing(4);
+
+    /* Left: degree labels */
+    QVBoxLayout *degCol = new QVBoxLayout;
+    degCol->setSpacing(0);
+    QLabel *plus15 = new QLabel("+15");
+    plus15->setAlignment(Qt::AlignCenter);
+    plus15->setStyleSheet("font-size: 10px; color: #9a9a96; background: transparent;");
+    degCol->addWidget(plus15);
+    degCol->addStretch();
+    QLabel *zeroLbl = new QLabel("0°");
+    zeroLbl->setAlignment(Qt::AlignCenter);
+    zeroLbl->setStyleSheet("font-size: 10px; color: #9a9a96; background: transparent;");
+    degCol->addWidget(zeroLbl);
+    degCol->addStretch();
+    QLabel *minus15 = new QLabel("-15");
+    minus15->setAlignment(Qt::AlignCenter);
+    minus15->setStyleSheet("font-size: 10px; color: #9a9a96; background: transparent;");
+    degCol->addWidget(minus15);
+    iconSliderRow->addLayout(degCol);
+
+    /* Center: Kinect tilt icon */
+    m_kinectUp = new QLabel;
+    m_kinectUp->setPixmap(QPixmap("/home/rexx/Proyectos/kinect-for-linux/icons/kinection-tilt.png")
+        .scaled(120, 150, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    m_kinectUp->setAlignment(Qt::AlignCenter);
+    m_kinectUp->setMinimumHeight(150);
+    iconSliderRow->addWidget(m_kinectUp);
+
+    /* Right: vertical slider */
+    m_tiltSlider = new QSlider(Qt::Vertical);
+    m_tiltSlider->setRange(-15, 15);
+    m_tiltSlider->setValue(0);
+    m_tiltSlider->setTickPosition(QSlider::TicksBothSides);
+    m_tiltSlider->setTickInterval(5);
+    m_tiltSlider->setMinimumHeight(140);
+    m_tiltSlider->setFixedWidth(30);
+    connect(m_tiltSlider, &QSlider::valueChanged, this, [this](int angle) {
+        m_tiltValue->setText(QString("%1°").arg(angle));
+    });
+    iconSliderRow->addWidget(m_tiltSlider);
+
+    motorLayout->addLayout(iconSliderRow);
+
+    /* Angle display */
+    m_tiltValue = new QLabel("0°");
+    m_tiltValue->setAlignment(Qt::AlignCenter);
+    m_tiltValue->setStyleSheet("font-size: 22px; font-weight: 600; color: #7fb5e8; background: transparent;");
+    motorLayout->addWidget(m_tiltValue);
+
+    /* Apply + Reset buttons */
+    QHBoxLayout *motorBtns = new QHBoxLayout;
+    m_tiltApplyBtn = new QPushButton("Aplicar");
+    m_tiltApplyBtn->setStyleSheet("QPushButton { background: #185fa5; border: none; color: white; }");
+    connect(m_tiltApplyBtn, &QPushButton::clicked, this, &MainWindow::onTiltApply);
+    motorBtns->addWidget(m_tiltApplyBtn);
+
+    m_tiltResetBtn = new QPushButton("Reset");
+    m_tiltResetBtn->setStyleSheet("QPushButton { border-color: #a32d2d; color: #e88; }");
+    connect(m_tiltResetBtn, &QPushButton::clicked, this, &MainWindow::onTiltReset);
+    motorBtns->addWidget(m_tiltResetBtn);
+    motorLayout->addLayout(motorBtns);
+
+    /* Cooldown empty frame */
+    m_tiltCooldownLabel = new QLabel("");
+    m_tiltCooldownLabel->setFixedHeight(32);
+    m_tiltCooldownLabel->setStyleSheet("background: #1a1c20; border: 0.5px solid #33363c; border-radius: 4px; font-size: 11px; color: #f9e2af;");
+    motorLayout->addWidget(m_tiltCooldownLabel);
+
+    motorLayout->addSpacing(4);
+
+    /* Sensors — simplified, no extra boxes */
+    QLabel *sensorTitle = new QLabel("Sensores");
+    sensorTitle->setStyleSheet("font-size: 12px; color: #9a9a96; border-top: 0.5px solid #33363c; padding-top: 8px; background: transparent;");
+    motorLayout->addWidget(sensorTitle);
+
+    m_accelValue = new QLabel("X: 0.00  Y: 0.00  Z: 0.00");
+    m_accelValue->setStyleSheet("font-family: monospace; font-size: 13px; background: transparent;");
+    motorLayout->addWidget(m_accelValue);
+
+    m_tiltValueSensor = new QLabel("Ángulo: 0°");
+    m_tiltValueSensor->setStyleSheet("font-size: 13px; background: transparent;");
+    motorLayout->addWidget(m_tiltValueSensor);
+
+    QPushButton *sensorUpdateBtn = new QPushButton("Actualizar sensores");
+    connect(sensorUpdateBtn, &QPushButton::clicked, this, [this, sensorUpdateBtn]() {
+        if (!isConnected()) return;
+        sensorUpdateBtn->setEnabled(false);
+        sensorUpdateBtn->setText("Leyendo...");
+        k4w_status_t resp;
+        bool ok = sendDaemonCmd(K4W_CMD_ACCEL, 0, &resp);
+        if (ok) {
+            m_accelValue->setText(QString("X: %1  Y: %2  Z: %3").arg(resp.accel_x, 0, 'f', 2).arg(resp.accel_y, 0, 'f', 2).arg(resp.accel_z, 0, 'f', 2));
+            m_tiltValueSensor->setText(QString("Ángulo: %1°").arg((int)resp.tilt_deg));
+        } else {
+            m_accelValue->setText("Error");
+            m_tiltValueSensor->setText("Error");
+        }
+        sensorUpdateBtn->setEnabled(true);
+        sensorUpdateBtn->setText("Actualizar sensores");
+    });
+    motorLayout->addWidget(sensorUpdateBtn);
+
+    rightCol->addWidget(motorPanel);
+    rightCol->addStretch();
+    grid->addWidget(rightPanel);
+
+    appLayout->addLayout(grid, 1);
+
+    /* ═══ Bottom Status ═══ */
+    m_statusBar = new QLabel;
+    m_statusBar->hide();
+
+    root->addWidget(appContainer);
 
     /* Connect mic signals */
     m_micThread = new MicMonitorThread(this);
@@ -984,7 +1188,7 @@ void MainWindow::setupUI() {
     m_waveTimer->start(33);
     connect(m_waveTimer, &QTimer::timeout, this, [this]() {
         QPixmap pm(m_waveform->size());
-        pm.fill(QColor("#181825"));
+        pm.fill(QColor("#1a1c20"));
         QPainter p(&pm);
         int w = pm.width();
         int h = pm.height();
@@ -996,8 +1200,8 @@ void MainWindow::setupUI() {
             if (barH < 2) barH = 2;
             int x = b * (barW + 2) + 1;
             int y = h - barH - 2;
-            QColor c = peak > 0.8f ? QColor("#f38ba8") :
-                       peak > 0.5f ? QColor("#f9e2af") : QColor("#a6e3a1");
+            QColor c = peak > 0.8f ? QColor("#e88") :
+                       peak > 0.5f ? QColor("#f9e2af") : QColor("#97c459");
             p.setBrush(c);
             p.drawRoundedRect(x, y, barW, barH, 2, 2);
         }
@@ -1005,232 +1209,5 @@ void MainWindow::setupUI() {
         m_waveform->setPixmap(pm);
     });
     connect(m_micThread, &MicMonitorThread::levelsUpdated,
-            m_waveTimer, [this](){}); /* just trigger repaint via timer */
-
-    leftCol->addStretch();
-    mainRow->addLayout(leftCol, 0);
-
-    /* ── Center Column: Camera View + Sensors ── */
-    QVBoxLayout *centerCol = new QVBoxLayout;
-    centerCol->setSpacing(6);
-
-    QLabel *viewTitle = new QLabel("Vista de Cámara Principal (Cámara 1473)");
-    viewTitle->setStyleSheet("font-weight:bold; font-size:12px; color:#cdd6f4;");
-    centerCol->addWidget(viewTitle);
-
-    m_mainView = new QLabel;
-    m_mainView->setMinimumSize(500, 380);
-    m_mainView->setAlignment(Qt::AlignCenter);
-    m_mainView->setStyleSheet(
-        "background:#181825; border:2px solid #45475a; border-radius:8px;");
-    m_mainView->setText("RGB webcam stream");
-    m_mainView->setStyleSheet(m_mainView->styleSheet() + " color:#585b70; font-size:14px;");
-    centerCol->addWidget(m_mainView, 1);
-
-    /* Buttons Row */
-    QHBoxLayout *btnRow = new QHBoxLayout;
-    btnRow->setSpacing(8);
-
-    m_captureBtn = new QPushButton("  Capturar Foto");
-    m_captureBtn->setStyleSheet(
-        "QPushButton { background:#313244; color:#cdd6f4; border:1px solid #585b70; "
-        "border-radius:6px; padding:8px 14px; font-size:11px; }"
-        "QPushButton:hover { background:#45475a; }");
-    connect(m_captureBtn, &QPushButton::clicked, this, &MainWindow::onCapturePhoto);
-    btnRow->addWidget(m_captureBtn);
-
-    m_recordBtn = new QPushButton("  Grabar Video");
-    m_recordBtn->setStyleSheet(
-        "QPushButton { background:#45475a; color:#cdd6f4; border:1px solid #585b70; "
-        "border-radius:6px; padding:8px 14px; font-size:11px; }"
-        "QPushButton:hover { background:#585b70; }");
-    connect(m_recordBtn, &QPushButton::clicked, this, &MainWindow::onRecordToggle);
-    btnRow->addWidget(m_recordBtn);
-
-    m_stopBtn = new QPushButton("  Detener");
-    m_stopBtn->setStyleSheet(
-        "QPushButton { background:#f38ba8; color:#1e1e2e; border:1px solid #e64553; "
-        "border-radius:6px; padding:8px 14px; font-size:11px; font-weight:bold; }");
-    m_stopBtn->setVisible(false);
-    connect(m_stopBtn, &QPushButton::clicked, this, &MainWindow::onRecordToggle);
-    btnRow->addWidget(m_stopBtn);
-
-    m_timerLabel = new QLabel("00:00:00");
-    m_timerLabel->setStyleSheet("font-size:13px; font-family:monospace; color:#cdd6f4; padding:6px;");
-    btnRow->addWidget(m_timerLabel);
-    btnRow->addStretch();
-    centerCol->addLayout(btnRow);
-
-    mainRow->addLayout(centerCol, 1);
-
-    /* ── Right Column: Motor Control ── */
-    QVBoxLayout *rightCol = new QVBoxLayout;
-    rightCol->setSpacing(6);
-
-    QLabel *motorTitle = new QLabel("Control de Movimiento\n(Kinect Motor)");
-    motorTitle->setAlignment(Qt::AlignCenter);
-    motorTitle->setStyleSheet("font-weight:bold; font-size:12px; color:#cdd6f4;");
-
-    m_motorStatusDot = new QLabel;
-    m_motorStatusDot->setFixedSize(14, 14);
-    m_motorStatusDot->setStyleSheet("background:transparent; border:2px solid #a6e3a1; border-radius:7px;");
-
-    QHBoxLayout *motorTitleRow = new QHBoxLayout;
-    motorTitleRow->addStretch();
-    motorTitleRow->addWidget(motorTitle);
-    motorTitleRow->addWidget(m_motorStatusDot);
-    motorTitleRow->addStretch();
-    rightCol->addLayout(motorTitleRow);
-
-    /* Motor slider area */
-    QHBoxLayout *motorArea = new QHBoxLayout;
-    motorArea->setAlignment(Qt::AlignTop);
-
-    /* Labels + Slider column */
-    QVBoxLayout *sliderCol = new QVBoxLayout;
-    sliderCol->setAlignment(Qt::AlignTop);
-    sliderCol->setSpacing(4);
-
-    QLabel *plusLabel = new QLabel("+15");
-    plusLabel->setAlignment(Qt::AlignCenter);
-    plusLabel->setStyleSheet("font-size:10px; color:#a6adc8;");
-    sliderCol->addWidget(plusLabel);
-
-    QLabel *zoneLabel = new QLabel("Zona\nzona");
-    zoneLabel->setAlignment(Qt::AlignCenter);
-    zoneLabel->setStyleSheet("font-size:9px; color:#585b70;");
-    sliderCol->addWidget(zoneLabel);
-
-    m_tiltSlider = new QSlider(Qt::Vertical);
-    m_tiltSlider->setRange(-15, 15);
-    m_tiltSlider->setValue(0);
-    m_tiltSlider->setTickPosition(QSlider::TicksBothSides);
-    m_tiltSlider->setTickInterval(5);
-    m_tiltSlider->setMinimumHeight(140);
-    m_tiltSlider->setStyleSheet(
-        "QSlider::groove:vertical { background:#45475a; width:10px; border-radius:5px; }"
-        "QSlider::handle:vertical { background:#89b4fa; height:20px; width:20px; "
-        "margin:-5px; border-radius:10px; border:2px solid #74c7ec; }"
-        "QSlider::sub-page:vertical { background:#89b4fa; border-radius:5px; }");
-    connect(m_tiltSlider, &QSlider::valueChanged, this, [this](int angle) {
-        m_tiltValue->setText(QString("%1°").arg(angle));
-        int clamped = qBound(-31, angle, 31);
-        m_kinectUp->setStyleSheet(QString("background:transparent; transform: rotate(%1deg);").arg(-clamped));
-    });
-    sliderCol->addWidget(m_tiltSlider);
-
-    QLabel *minusLabel = new QLabel("-15");
-    minusLabel->setAlignment(Qt::AlignCenter);
-    minusLabel->setStyleSheet("font-size:10px; color:#a6adc8;");
-    sliderCol->addWidget(minusLabel);
-
-    /* Aplicar button */
-    m_tiltApplyBtn = new QPushButton("Aplicar");
-    m_tiltApplyBtn->setMinimumWidth(80);
-    m_tiltApplyBtn->setStyleSheet(
-        "QPushButton { background:#89b4fa; color:#1e1e2e; border:1px solid #74c7ec; "
-        "border-radius:6px; padding:8px 16px; font-size:12px; font-weight:bold; }"
-        "QPushButton:hover { background:#74c7ec; }"
-        "QPushButton:disabled { background:#45475a; color:#585b70; }");
-    connect(m_tiltApplyBtn, &QPushButton::clicked, this, &MainWindow::onTiltApply);
-    sliderCol->addWidget(m_tiltApplyBtn);
-
-    /* Reset button */
-    m_tiltResetBtn = new QPushButton("Reset 0°");
-    m_tiltResetBtn->setMinimumWidth(80);
-    m_tiltResetBtn->setStyleSheet(
-        "QPushButton { background:#f38ba8; color:#1e1e2e; border:1px solid #e64553; "
-        "border-radius:6px; padding:6px 12px; font-size:11px; font-weight:bold; }"
-        "QPushButton:hover { background:#e64553; }"
-        "QPushButton:disabled { background:#45475a; color:#585b70; }");
-    connect(m_tiltResetBtn, &QPushButton::clicked, this, &MainWindow::onTiltReset);
-    sliderCol->addWidget(m_tiltResetBtn);
-
-    /* Cooldown countdown label */
-    m_tiltCooldownLabel = new QLabel("");
-    m_tiltCooldownLabel->setAlignment(Qt::AlignCenter);
-    m_tiltCooldownLabel->setStyleSheet("font-size:11px; color:#f9e2af; font-weight:bold;");
-    sliderCol->addWidget(m_tiltCooldownLabel);
-
-    /* Sensor data in motor section */
-    QLabel *sensorTitle = new QLabel("Sensores");
-    sensorTitle->setAlignment(Qt::AlignCenter);
-    sensorTitle->setStyleSheet("font-weight:bold; font-size:10px; color:#a6adc8; margin-top:8px;");
-    sliderCol->addWidget(sensorTitle);
-
-    m_accelValue = new QLabel("—");
-    m_accelValue->setAlignment(Qt::AlignCenter);
-    m_accelValue->setStyleSheet("font-size:10px; color:#cdd6f4; font-family:monospace; padding:2px;");
-    sliderCol->addWidget(m_accelValue);
-
-    m_tiltValueSensor = new QLabel("—");
-    m_tiltValueSensor->setAlignment(Qt::AlignCenter);
-    m_tiltValueSensor->setStyleSheet("font-size:10px; color:#cdd6f4; font-family:monospace; padding:2px;");
-    sliderCol->addWidget(m_tiltValueSensor);
-
-    QPushButton *sensorUpdateBtn = new QPushButton("Actualizar Sensores");
-    sensorUpdateBtn->setMinimumWidth(80);
-    sensorUpdateBtn->setStyleSheet(
-        "QPushButton { background:#45475a; color:#cdd6f4; border:1px solid #585b70; "
-        "border-radius:6px; padding:6px 12px; font-size:10px; }"
-        "QPushButton:hover { background:#585b70; }");
-    connect(sensorUpdateBtn, &QPushButton::clicked, this, [this, sensorUpdateBtn]() {
-        if (!isConnected()) return;
-        sensorUpdateBtn->setEnabled(false);
-        sensorUpdateBtn->setText("Leyendo...");
-        /* Block briefly on ACCEL — user explicitly requested it */
-        k4w_status_t resp;
-        bool ok = sendDaemonCmd(K4W_CMD_ACCEL, 0, &resp);
-        if (ok) {
-            m_accelValue->setText(QString("X:%1 Y:%2 Z:%3").arg(resp.accel_x, 0, 'f', 2).arg(resp.accel_y, 0, 'f', 2).arg(resp.accel_z, 0, 'f', 2));
-            m_tiltValueSensor->setText(QString("Ángulo: %1°").arg((int)resp.tilt_deg));
-        } else {
-            m_accelValue->setText("Error");
-            m_tiltValueSensor->setText("Error");
-        }
-        sensorUpdateBtn->setEnabled(true);
-        sensorUpdateBtn->setText("Actualizar Sensores");
-    });
-    sliderCol->addWidget(sensorUpdateBtn);
-
-    motorArea->addLayout(sliderCol);
-
-    /* Kinect device icons */
-    QVBoxLayout *iconsCol = new QVBoxLayout;
-    iconsCol->setAlignment(Qt::AlignTop);
-    iconsCol->setSpacing(4);
-
-    m_kinectUp = new QLabel;
-    m_kinectUp->setPixmap(QPixmap("/home/rexx/Proyectos/k4w-suite/src/ctl/icons/kinection-enabled.png")
-        .scaled(180, 140, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-    m_kinectUp->setAlignment(Qt::AlignCenter);
-    iconsCol->addWidget(m_kinectUp);
-
-    m_tiltValue = new QLabel("0°");
-    m_tiltValue->setAlignment(Qt::AlignCenter);
-    m_tiltValue->setStyleSheet("font-size:16px; font-weight:bold; color:#89b4fa;");
-    iconsCol->addWidget(m_tiltValue);
-
-    m_kinectDown = new QLabel;
-    m_kinectDown->setPixmap(QPixmap("/home/rexx/Proyectos/k4w-suite/src/ctl/icons/kinection-tilt.png")
-        .scaled(180, 140, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-    m_kinectDown->setAlignment(Qt::AlignCenter);
-    iconsCol->addWidget(m_kinectDown);
-
-    motorArea->addLayout(iconsCol);
-    rightCol->addLayout(motorArea);
-    rightCol->addStretch();
-
-    mainRow->addLayout(rightCol, 0);
-
-    root->addLayout(mainRow, 1);
-
-    /* ═══ Status Bar (Bottom) ═══ */
-    m_statusBar = new QLabel("  Daemon Corriendo (Todo OK)");
-    m_statusBar->setStyleSheet(
-        "background:#1e1e2e; border:1px solid #a6e3a1; border-radius:4px; "
-        "padding:6px; font-size:11px; color:#a6e3a1;");
-    m_statusBar->installEventFilter(this);
-    m_statusBar->setCursor(Qt::PointingHandCursor);
-    root->addWidget(m_statusBar);
+            m_waveTimer, [this](){});
 }
