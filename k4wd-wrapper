@@ -1,0 +1,14 @@
+#!/bin/bash
+# k4wd wrapper — sets PipeWire/PulseAudio env for root execution
+# k4wd needs access to the user's PulseAudio socket to create null-sink
+
+# Find the real user (not root)
+REAL_USER="${SUDO_USER:-$USER}"
+REAL_UID=$(id -u "$REAL_USER")
+
+# Set PulseAudio/PipeWire environment
+export PULSE_SERVER="unix:/run/user/${REAL_UID}/pulse/native"
+export XDG_RUNTIME_DIR="/run/user/${REAL_UID}"
+
+# Pass all arguments to the real k4wd
+exec /usr/local/bin/k4wd.bin "$@"

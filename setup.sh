@@ -233,7 +233,8 @@ install_app() {
         sudo cmake --install .
     else
         # Install pre-built binaries manually
-        sudo install -Dm755 "$SCRIPT_DIR/k4wd" /usr/local/bin/k4wd
+        sudo install -Dm755 "$SCRIPT_DIR/k4wd" /usr/local/bin/k4wd.bin
+        sudo install -Dm755 "$SCRIPT_DIR/k4wd-wrapper" /usr/local/bin/k4wd
         sudo install -Dm755 "$SCRIPT_DIR/libK4WDriver.so" /usr/local/lib/libK4WDriver.so
         sudo install -Dm755 "$SCRIPT_DIR/kinect-for-linux" /usr/local/bin/kinect-for-linux
         sudo install -Dm644 "$SCRIPT_DIR/kinect-for-linux.png" /usr/share/pixmaps/kinect-for-linux.png
@@ -274,6 +275,7 @@ install_app() {
     echo ""
     echo "  Run daemon:     sudo k4wd"
     echo "  Run GUI:        kinect-for-linux"
+    echo "  Audio sink:     'k4w-mic' (Monitor of k4w-mic)"
     echo "  OpenNI2 apps:   Set LD_LIBRARY_PATH=/usr/local/lib"
     echo ""
     echo "  Processing:     Copy libK4WDriver.so to SimpleOpenNI OpenNI2/Drivers/"
