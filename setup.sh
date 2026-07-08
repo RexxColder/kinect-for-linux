@@ -26,6 +26,15 @@ detect_distro() {
     if [ -f /etc/arch-release ]; then
         DISTRO="arch"
         PKG="pacman"
+        # Detect AUR helper (yay > paru > pacman only)
+        if command -v yay &>/dev/null; then
+            AUR_HELPER="yay"
+        elif command -v paru &>/dev/null; then
+            AUR_HELPER="paru"
+        else
+            AUR_HELPER=""
+            warn "No AUR helper found (yay/paru). AUR packages may fail."
+        fi
     elif [ -f /etc/debian_version ] || [ -f /etc/lsb-release ]; then
         DISTRO="debian"
         PKG="apt"
@@ -39,15 +48,39 @@ detect_distro() {
     info "Detected distro: $DISTRO"
 }
 
+# ─── Arch: install AUR package ────────────────────
+# Tries: yay -S / paru -S / pacman -S
+aur_install() {
+    local pkgs=("$@")
+    if [ -n "$AUR_HELPER" ]; then
+        info "Installing AUR packages with $AUR_HELPER: ${pkgs[*]}"
+        $AUR_HELPER -S --noconfirm --needed "${pkgs[@]}"
+    else
+        info "Falling back to pacman for: ${pkgs[*]}"
+        sudo pacman -S --noconfirm --needed "${pkgs[@]}"
+    fi
+}
+
 # ─── Install Dependencies ─────────────────────────
 install_deps() {
     info "Installing build dependencies..."
     case $DISTRO in
         arch)
+            # Official repos
             sudo pacman -Sy --noconfirm --needed \
                 cmake gcc make pkg-config \
-                libfreenect libusb alsa-lib pulseaudio qt6-base qt6-tools \
-                python python-numpy opencv v4l2loopback-dkms
+                libusb alsa-lib qt6-base qt6-tools \
+                python python-numpy opencv
+            # AUR packages (libfreenect, v4l2loopback-dkms)
+            # pulseaudio-libs is NOT needed when pipewire-pulse is installed
+            local AUR_PKGS=()
+            pacman -Qi libfreenect &>/dev/null || AUR_PKGS+=(libfreenect)
+            pacman -Qi v4l2loopback-dkms &>/dev/null || AUR_PKGS+=(v4l2loopback-dkms)
+            if [ ${#AUR_PKGS[@]} -gt 0 ]; then
+                aur_install "${AUR_PKGS[@]}"
+            else
+                log "AUR packages already installed"
+            fi
             ;;
         debian)
             sudo apt update
@@ -96,7 +129,13 @@ install_firmware() {
 
     case $choice in
         1)
-            read -p "Path to KinectRuntime-v1.x-Setup.exe: " exe_path
+            local DEFAULT_FW="$HOME/Descargas/KinectRuntime-v1.8-Setup.exe"
+            if [ -f "$DEFAULT_FW" ]; then
+                read -p "Path to KinectRuntime-v1.x-Setup.exe [$DEFAULT_FW]: " exe_path
+                exe_path="${exe_path:-$DEFAULT_FW}"
+            else
+                read -p "Path to KinectRuntime-v1.x-Setup.exe: " exe_path
+            fi
             if [ ! -f "$exe_path" ]; then
                 err "File not found: $exe_path"
                 return 1
@@ -118,11 +157,11 @@ install_firmware() {
             if command -v msiextract &>/dev/null; then
                 msiextract "$tmpdir/a2.msi" -d "$tmpdir/extracted/" 2>/dev/null
             else
-                warn "msiextract not found. Installing cabextract..."
+                warn "msiextract not found. Installing msitools..."
                 case $DISTRO in
-                    arch)    sudo pacman -S --noconfirm cabextract ;;
-                    debian)  sudo apt install -y cabextract ;;
-                    fedora)  sudo dnf install -y cabextract ;;
+                    arch)    sudo pacman -S --noconfirm msitools ;;
+                    debian)  sudo apt install -y msitools ;;
+                    fedora)  sudo dnf install -y msitools ;;
                 esac
                 msiextract "$tmpdir/a2.msi" -d "$tmpdir/extracted/" 2>/dev/null
             fi
@@ -136,13 +175,28 @@ install_firmware() {
             rm -rf "$tmpdir"
             ;;
         2)
+            local FW_URL="https://www.microsoft.com/en-us/download/details.aspx?id=40277"
+            local FW_DIRECT="https://download.microsoft.com/download/e/c/5/ec50686b-82f4-4dbf-a922-980183b214e6/KinectRuntime-v1.8-Setup.exe"
             info "Opening Microsoft download page..."
-            if command -v xdg-open &>/dev/null; then
-                xdg-open "https://www.microsoft.com/en-us/download/details.aspx?id=40276"
+            # Try multiple browser launchers
+            if command -v xdg-open &>/dev/null && xdg-open "$FW_URL" 2>/dev/null; then
+                true
+            elif command -v gnome-open &>/dev/null && gnome-open "$FW_URL" 2>/dev/null; then
+                true
+            elif command -v firefox &>/dev/null; then
+                firefox "$FW_URL" &
+            elif command -v chromium &>/dev/null; then
+                chromium "$FW_URL" &
+            elif command -v google-chrome &>/dev/null; then
+                google-chrome "$FW_URL" &
             else
-                echo "Download from: https://www.microsoft.com/en-us/download/details.aspx?id=40276"
-                echo "Run this script again after downloading."
+                warn "Could not open browser."
             fi
+            echo ""
+            echo "Download KinectRuntime-v1.8-Setup.exe (NOT KinectDeveloperToolkit)"
+            echo "  Page:  $FW_URL"
+            echo "  Direct: $FW_DIRECT"
+            echo "Run this script again after downloading."
             exit 0
             ;;
         3)
@@ -153,21 +207,37 @@ install_firmware() {
 
 # ─── Build ────────────────────────────────────────
 build() {
-    info "Building Kinect for Linux..."
-    mkdir -p "$BUILD_DIR"
-    cd "$BUILD_DIR"
-    cmake "$SCRIPT_DIR" \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DOPENNI2_DIR=/home/rexx/Proyectos/OpenNI2
-    make -j$(nproc)
-    log "Build complete"
+    # Pre-built release — skip cmake/make unless source exists
+    if [ -f "$SCRIPT_DIR/CMakeLists.txt" ]; then
+        info "Building Kinect for Linux..."
+        mkdir -p "$BUILD_DIR"
+        cd "$BUILD_DIR"
+        cmake "$SCRIPT_DIR" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DOPENNI2_DIR=/home/rexx/Proyectos/OpenNI2
+        make -j$(nproc)
+        log "Build complete"
+    else
+        log "Pre-built release — skipping build"
+    fi
 }
 
 # ─── Install ──────────────────────────────────────
 install_app() {
     info "Installing Kinect for Linux..."
-    cd "$BUILD_DIR"
-    sudo cmake --install .
+    if [ -f "$BUILD_DIR/CMakeCache.txt" ]; then
+        cd "$BUILD_DIR"
+        sudo cmake --install .
+    else
+        # Install pre-built binaries manually
+        sudo install -Dm755 "$SCRIPT_DIR/k4wd" /usr/local/bin/k4wd
+        sudo install -Dm755 "$SCRIPT_DIR/libK4WDriver.so" /usr/local/lib/libK4WDriver.so
+        sudo install -Dm755 "$SCRIPT_DIR/kinect-for-linux" /usr/local/bin/kinect-for-linux
+        sudo install -Dm644 "$SCRIPT_DIR/kinect-for-linux.png" /usr/share/pixmaps/kinect-for-linux.png
+        sudo install -Dm644 "$SCRIPT_DIR/kinect-for-linux.desktop" /usr/share/applications/kinect-for-linux.desktop
+        sudo install -Dm755 "$SCRIPT_DIR/skeleton_tracker.py" /usr/local/bin/skeleton_tracker
+        sudo ldconfig
+    fi
 
     # udev rules
     sudo cp "$SCRIPT_DIR/90-kinect.rules" /etc/udev/rules.d/
