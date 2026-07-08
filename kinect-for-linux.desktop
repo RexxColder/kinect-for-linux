@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Kinect for Linux
+Comment=Kinect v1 control and development app
+Exec=kinect-for-linux
+Icon=kinect-for-linux
+Terminal=false
+Type=Application
+Categories=Utility;Development;HardwareSettings;
+Keywords=kinect;xbox;depth;camera;

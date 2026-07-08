@@ -1,0 +1,22 @@
+# Kinect for Windows v1 (K4W 1473) — Motor hub + Camera + Audio
+# Xbox 360 Kinect (1414) also included
+# Allows non-root access to Kinect devices
+
+# K4W Motor hub
+SUBSYSTEM=="usb", ATTRS{idVendor}=="045e", ATTRS{idProduct}=="02c2", MODE="0666"
+
+# K4W Camera
+SUBSYSTEM=="usb", ATTRS{idVendor}=="045e", ATTRS{idProduct}=="02ae", MODE="0666"
+
+# K4W Audio (before UAC firmware)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="045e", ATTRS{idProduct}=="02ad", MODE="0666"
+
+# K4W Audio (after UAC firmware)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="045e", ATTRS{idProduct}=="02bb", MODE="0666"
+
+# Xbox 360 Kinect
+SUBSYSTEM=="usb", ATTRS{idVendor}=="045e", ATTRS{idProduct}=="02b0", MODE="0666"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="045e", ATTRS{idProduct}=="02ad", MODE="0666"
+
+# ALSA rule for Kinect audio auto-bind
+SUBSYSTEM=="sound", ATTRS{idVendor}=="045e", ATTRS{idProduct}=="02bb", ENV{SOUND_INITIALIZED}="1"

@@ -1,0 +1,20 @@
+# Build
+build/
+*.o
+*.so
+*.a
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+/tmp/
+*.pyc
+__pycache__/
