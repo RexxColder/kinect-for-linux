@@ -140,37 +140,40 @@ install_firmware() {
                 err "File not found: $exe_path"
                 return 1
             fi
-            info "Extracting firmware..."
+            info "Extracting firmware from $exe_path..."
+            # Ensure dependencies
+            for tool in cabextract msiextract; do
+                if ! command -v "$tool" &>/dev/null; then
+                    warn "$tool not found. Installing..."
+                    case $DISTRO in
+                        arch)    sudo pacman -S --noconfirm --needed msitools ;;
+                        debian)  sudo apt install -y msitools ;;
+                        fedora)  sudo dnf install -y msitools ;;
+                    esac
+                fi
+            done
             tmpdir=$(mktemp -d)
-            dd bs=1 skip=622624 count=115650048 if="$exe_path" of="$tmpdir/kr.cab" 2>/dev/null
-            if command -v cabextract &>/dev/null; then
-                cabextract -F a2 "$tmpdir/kr.cab" -d "$tmpdir/" 2>/dev/null
-            else
-                warn "cabextract not found. Installing..."
-                case $DISTRO in
-                    arch)    sudo pacman -S --noconfirm cabextract ;;
-                    debian)  sudo apt install -y cabextract ;;
-                    fedora)  sudo dnf install -y cabextract ;;
-                esac
-                cabextract -F a2 "$tmpdir/kr.cab" -d "$tmpdir/" 2>/dev/null
+            # Extract CAB from NSIS installer (CAB at offset 309248)
+            dd if="$exe_path" of="$tmpdir/kr.cab" bs=1 skip=309248 2>/dev/null
+            if ! file "$tmpdir/kr.cab" | grep -q "Cabinet"; then
+                err "Could not extract CAB from installer."
+                rm -rf "$tmpdir"
+                return 1
             fi
-            if command -v msiextract &>/dev/null; then
-                msiextract "$tmpdir/a2.msi" -d "$tmpdir/extracted/" 2>/dev/null
-            else
-                warn "msiextract not found. Installing msitools..."
-                case $DISTRO in
-                    arch)    sudo pacman -S --noconfirm msitools ;;
-                    debian)  sudo apt install -y msitools ;;
-                    fedora)  sudo dnf install -y msitools ;;
-                esac
-                msiextract "$tmpdir/a2.msi" -d "$tmpdir/extracted/" 2>/dev/null
-            fi
+            # Extract MSI from CAB (cabextract writes to CWD, so cd there)
+            cd "$tmpdir"
+            cabextract -F a2 "kr.cab" 2>/dev/null
+            # Rename to .msi and extract
+            cp a2 a2.msi
+            msiextract a2.msi 2>/dev/null
+            cd - >/dev/null
+            # Find and install firmware
             fw=$(find "$tmpdir" -name "UAC.bin" -o -name "audios.bin" 2>/dev/null | head -1)
             if [ -n "$fw" ]; then
                 sudo cp "$fw" "$FW_PATH"
                 log "Firmware installed to $FW_PATH"
             else
-                err "Could not extract firmware. Try manual download."
+                err "Could not find UAC.bin in installer. Try manual download."
             fi
             rm -rf "$tmpdir"
             ;;
@@ -246,6 +249,14 @@ install_app() {
 
     # v4l2loopback config
     sudo cp "$SCRIPT_DIR/v4l2loopback.conf" /etc/modprobe.d/
+
+    # Blacklist gspca_kinect (conflicts with libfreenect USB access)
+    if [ ! -f /etc/modprobe.d/blacklist-gspca-kinect.conf ]; then
+        echo "blacklist gspca_kinect" | sudo tee /etc/modprobe.d/blacklist-gspca-kinect.conf >/dev/null
+        sudo rmmod gspca_kinect 2>/dev/null || true
+        sudo rmmod gspca_main 2>/dev/null || true
+        log "Blacklisted gspca_kinect module"
+    fi
 
     # Python venv for skeleton tracker
     info "Setting up Python environment for skeleton tracker..."
