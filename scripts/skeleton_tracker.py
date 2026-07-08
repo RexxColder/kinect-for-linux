@@ -58,9 +58,9 @@ def write_shm(skeletons, w, h):
 
 def main():
     print("Starting Kinect Skeleton Tracker (MediaPipe Pose Lite)...", flush=True)
-    model_path = "/home/rexx/Proyectos/k4w-suite/models/pose_landmarker_lite.task"
+    model_path = "/usr/local/share/k4w-models/pose_landmarker_lite.task"
     if not os.path.exists(model_path):
-        model_path = "/home/rexx/Proyectos/k4w-suite/models/pose_landmarker_heavy.task"
+        model_path = "/usr/local/share/k4w-models/pose_landmarker_heavy.task"
         print(f"Lite not found, using heavy: {model_path}", flush=True)
     else:
         print(f"Using lite model: {model_path}", flush=True)

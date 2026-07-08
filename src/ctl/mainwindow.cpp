@@ -194,7 +194,7 @@ MainWindow::MainWindow(QWidget *parent)
     {
         QIcon icon;
         for (int sz : {16, 22, 24, 32, 48, 64, 128, 256, 512}) {
-            QString path = QString("/home/rexx/Proyectos/k4w-suite/src/ctl/icons/kinection.png");
+            QString path = QString("/usr/share/pixmaps/kinect-for-linux.png");
             QPixmap pm(path);
             if (!pm.isNull())
                 icon.addPixmap(pm.scaled(sz, sz, Qt::KeepAspectRatio, Qt::SmoothTransformation));
@@ -367,22 +367,20 @@ void MainWindow::updateTrayIcon() {
     QString basePrefix;
     QString tooltip;
     if (isConnected()) {
-        basePrefix = "/home/rexx/Proyectos/k4w-suite/src/ctl/icons/kinection-tray-green";
+        basePrefix = "/usr/share/pixmaps/kinect-for-linux";
         tooltip = "k4w-ctl: Daemon corriendo";
         m_isStarting = false;
     } else if (m_isStarting) {
-        basePrefix = "/home/rexx/Proyectos/k4w-suite/src/ctl/icons/kinection-tray-yellow";
+        basePrefix = "/usr/share/pixmaps/kinect-for-linux";
         tooltip = "k4w-ctl: Conectando...";
     } else {
-        basePrefix = "/home/rexx/Proyectos/k4w-suite/src/ctl/icons/kinection-tray-red";
+        basePrefix = "/usr/share/pixmaps/kinect-for-linux";
         tooltip = "k4w-ctl: Daemon detenido";
     }
     QIcon icon;
-    for (int sz : {16, 22, 24, 32, 48, 64}) {
-        QPixmap pm(QString("%1-%2.png").arg(basePrefix).arg(sz));
-        if (!pm.isNull())
-            icon.addPixmap(pm);
-    }
+    QPixmap pm(basePrefix + ".png");
+    if (!pm.isNull())
+        icon.addPixmap(pm);
     m_trayIcon->setIcon(icon);
     m_trayIcon->setToolTip(tooltip);
 }
@@ -451,7 +449,7 @@ void MainWindow::onStartDaemon() {
         "echo 1-6.1:1.3 > /sys/bus/usb/drivers/snd-usb-audio/bind 2>/dev/null"});
 
     /* Start daemon with pkexec for graphical sudo */
-    QProcess::startDetached("pkexec", {"/home/rexx/Proyectos/k4w-suite/build/k4w"});
+    QProcess::startDetached("pkexec", {"/usr/local/bin/k4wd"});
 
     m_startDaemonBtn->setEnabled(false);
     m_startDaemonBtn->setText("Iniciando...");
@@ -509,7 +507,7 @@ void MainWindow::onResetDaemon() {
         "echo 1-6.1:1.3 > /sys/bus/usb/drivers/snd-usb-audio/bind 2>/dev/null"});
 
     /* Start daemon fresh */
-    QProcess::startDetached("pkexec", {"/home/rexx/Proyectos/k4w-suite/build/k4w"});
+    QProcess::startDetached("pkexec", {"/usr/local/bin/k4wd"});
 
     m_startDaemonBtn->setEnabled(false);
     m_startDaemonBtn->setText("Iniciando...");
@@ -623,7 +621,7 @@ void MainWindow::onModeChanged(int index) {
             delete m_skeletonProcess;
             m_skeletonProcess = new QProcess(this);
             m_skeletonProcess->setProgram("/tmp/mediapipe-venv/bin/python3");
-            m_skeletonProcess->setArguments({"/home/rexx/Proyectos/k4w-suite/scripts/skeleton_tracker.py"});
+            m_skeletonProcess->setArguments({"/usr/local/bin/skeleton_tracker.py"});
             m_skeletonProcess->setProcessChannelMode(QProcess::ForwardedChannels);
             m_skeletonProcess->start();
         }
@@ -827,7 +825,7 @@ void MainWindow::setupUI() {
 
     m_statusDot = new QLabel;
     m_statusDot->setFixedSize(28, 28);
-    m_statusDot->setPixmap(QPixmap("/home/rexx/Proyectos/kinect-for-linux/icons/kinection-enabled.png")
+    m_statusDot->setPixmap(QPixmap("/usr/share/pixmaps/kinect-for-linux.png")
         .scaled(28, 28, Qt::KeepAspectRatio, Qt::SmoothTransformation));
 
     m_statusText = new QLabel("Daemon corriendo — todo OK");
@@ -1076,7 +1074,7 @@ void MainWindow::setupUI() {
 
     /* Center: Kinect tilt icon */
     m_kinectUp = new QLabel;
-    m_kinectUp->setPixmap(QPixmap("/home/rexx/Proyectos/kinect-for-linux/icons/kinection-tilt.png")
+    m_kinectUp->setPixmap(QPixmap("/usr/share/pixmaps/kinect-for-linux.png")
         .scaled(120, 150, Qt::KeepAspectRatio, Qt::SmoothTransformation));
     m_kinectUp->setAlignment(Qt::AlignCenter);
     m_kinectUp->setMinimumHeight(150);
