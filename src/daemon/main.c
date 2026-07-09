@@ -105,6 +105,9 @@ int main(int argc, char **argv) {
     /* Initialize motor control via audio device */
     k4w_motor_init(NULL);
 
+    /* Set state for kinect module (needed for motor pause/resume) */
+    k4w_kinect_set_state(&g_state);
+
     /* Start audio thread if enabled */
     if (cfg.enable_audio) {
         k4w_kinect_start_audio(&g_state);

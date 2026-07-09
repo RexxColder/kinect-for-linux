@@ -5,17 +5,6 @@
 #include <pthread.h>
 
 /* ═══ K4W Motor Protocol (via audio device 02bb) ═══════════ */
-/*
- * Commands go through audio device endpoint 0x01 (OUT) / 0x81 (IN).
- * Command struct (20 bytes): magic(4) tag(4) arg1(4) cmd(4) arg2(4)
- * Reply struct (12 bytes):   magic(4) tag(4) status(4)
- *
- * magic = 0x06022009 (cmd) / 0x0a6fe000 (reply)
- * cmd 0x803b = set tilt, arg2 = angle (-31..+31)
- * cmd 0x10   = set LED,   arg2 = led_state (1=off,2=blink,3=green,4=red)
- * cmd 0x8032 = get accel, arg1 = 0x68
- */
-
 #define MOTOR_MAGIC_CMD   0x06022009
 #define MOTOR_MAGIC_REPLY 0x0a6fe000
 #define CMD_SET_TILT      0x803b
@@ -41,13 +30,29 @@ typedef struct {
     uint32_t status;
 } motor_reply_t;
 
-/* ═══ Motor State ══════════════════════════════════════════ */
-static libusb_context *g_usb_ctx = NULL;
 static uint32_t g_tag_seq = 0;
+
+/* ═══ Motor State ══════════════════════════════════════════ */
+static freenect_device *g_freenect_dev = NULL;
+static libusb_context *g_usb_ctx = NULL;
 static pthread_mutex_t g_motor_lock = PTHREAD_MUTEX_INITIALIZER;
 static double g_current_tilt = 0;
 static double g_target_tilt = 0;
 static int g_motor_busy = 0;
+
+/* ═══ Init ══════════════════════════════════════════════════ */
+int k4w_motor_init(freenect_context *ctx) {
+    (void)ctx;
+    libusb_init(&g_usb_ctx);
+    K4W_LOG("Motor: libusb context initialized\n");
+    g_current_tilt = 0;
+    g_target_tilt = 0;
+    return 0;
+}
+
+void k4w_motor_set_device(freenect_device *dev) {
+    g_freenect_dev = dev;
+}
 
 /* ═══ Open/close audio device per command ════════════════ */
 static libusb_device_handle *motor_open_device(void) {
@@ -56,17 +61,31 @@ static libusb_device_handle *motor_open_device(void) {
         K4W_LOG("Motor: open failed\n");
         return NULL;
     }
-    /* Detach ALL kernel drivers — ALSA needs IF 2/3 but we need IF 0/1.
-     * Audio is already paused, so it's safe to detach. */
+    /* Aggressively detach ALL kernel drivers from ALL interfaces */
     for (int i = 0; i < 4; i++) {
-        if (libusb_kernel_driver_active(dev, i) == 1) {
+        int r = libusb_kernel_driver_active(dev, i);
+        if (r == 1) {
+            K4W_LOG("Motor: detaching kernel driver from IF%d\n", i);
             libusb_detach_kernel_driver(dev, i);
         }
+        /* Even if not active, try to detach to be sure */
+        libusb_detach_kernel_driver(dev, i);
     }
-    int r0 = libusb_claim_interface(dev, 0);
-    int r1 = libusb_claim_interface(dev, 1);
+    usleep(100000); /* 100ms for kernel to settle */
+    /* Retry loop for claiming interfaces */
+    int r0 = -1, r1 = -1;
+    for (int attempt = 0; attempt < 5; attempt++) {
+        r0 = libusb_claim_interface(dev, 0);
+        r1 = libusb_claim_interface(dev, 1);
+        if (r0 == 0 && r1 == 0) break;
+        K4W_LOG("Motor: claim attempt %d failed IF0=%d IF1=%d\n", attempt + 1, r0, r1);
+        /* Release any partially claimed interfaces */
+        if (r0 == 0) libusb_release_interface(dev, 0);
+        if (r1 == 0) libusb_release_interface(dev, 1);
+        usleep(1000000); /* 1s between retries */
+    }
     if (r0 != 0 || r1 != 0) {
-        K4W_LOG("Motor: claim failed IF0=%d IF1=%d\n", r0, r1);
+        K4W_LOG("Motor: claim failed after 5 attempts IF0=%d IF1=%d\n", r0, r1);
         libusb_close(dev);
         return NULL;
     }
@@ -78,58 +97,7 @@ static void motor_close_device(libusb_device_handle *dev) {
     libusb_release_interface(dev, 1);
     libusb_release_interface(dev, 0);
     libusb_close(dev);
-    /* Let kernel re-attach snd-usb-audio to IF 2/3 */
-    usleep(100000);
-}
-
-/* ═══ Low-level USB I/O ═══════════════════════════════════ */
-static int motor_send_cmd(uint32_t cmd, uint32_t arg2, uint32_t arg1,
-                           motor_reply_t *reply_out) {
-    libusb_device_handle *dev = motor_open_device();
-    if (!dev) return -1;
-
-    motor_cmd_t cmd_pkt;
-    cmd_pkt.magic = MOTOR_MAGIC_CMD;
-    cmd_pkt.tag   = g_tag_seq++;
-    cmd_pkt.arg1  = arg1;
-    cmd_pkt.cmd   = cmd;
-    cmd_pkt.arg2  = arg2;
-
-    int transferred = 0;
-    /* Bulk OUT may timeout (-7) but device still processes the command */
-    libusb_bulk_transfer(dev, 0x01,
-                          (unsigned char *)&cmd_pkt, 20,
-                          &transferred, 2000);
-
-    /* Read reply */
-    unsigned char buf[512] = {0};
-    int r = libusb_bulk_transfer(dev, 0x81, buf, 512, &transferred, 2000);
-    if (r != 0) {
-        K4W_LOG("Motor: bulk IN failed: %s\n", libusb_strerror(r));
-        motor_close_device(dev);
-        return r;
-    }
-
-    if (reply_out && transferred >= 12) {
-        memcpy(reply_out, buf, 12);
-        if (reply_out->magic != MOTOR_MAGIC_REPLY) {
-            K4W_LOG("Motor: bad reply magic 0x%08x\n", reply_out->magic);
-            motor_close_device(dev);
-            return -1;
-        }
-    }
-    motor_close_device(dev);
-    return 0;
-}
-
-/* ═══ Open audio device for motor control ═════════════════ */
-int k4w_motor_init(freenect_context *ctx) {
-    (void)ctx;
-    libusb_init(&g_usb_ctx);
-    K4W_LOG("Motor: libusb context initialized\n");
-    g_current_tilt = 0;
-    g_target_tilt = 0;
-    return 0;
+    usleep(100000); /* 100ms for kernel to re-attach */
 }
 
 /* ═══ LED Control ══════════════════════════════════════════ */
@@ -149,16 +117,30 @@ int k4w_motor_set_led(freenect_device *dev, int color) {
     }
 
     pthread_mutex_lock(&g_motor_lock);
-    motor_reply_t reply;
-    int r = motor_send_cmd(CMD_SET_LED, led, 0, &reply);
+    libusb_device_handle *usbdev = motor_open_device();
+    if (!usbdev) { pthread_mutex_unlock(&g_motor_lock); return -1; }
+
+    motor_cmd_t cmd_pkt;
+    cmd_pkt.magic = MOTOR_MAGIC_CMD;
+    cmd_pkt.tag   = g_tag_seq++;
+    cmd_pkt.arg1  = 0;
+    cmd_pkt.cmd   = CMD_SET_LED;
+    cmd_pkt.arg2  = led;
+
+    int transferred = 0;
+    libusb_bulk_transfer(usbdev, 0x01, (unsigned char *)&cmd_pkt, 20, &transferred, 2000);
+
+    unsigned char buf[512] = {0};
+    libusb_bulk_transfer(usbdev, 0x81, buf, 512, &transferred, 2000);
+
+    motor_close_device(usbdev);
     pthread_mutex_unlock(&g_motor_lock);
 
-    if (r == 0)
-        K4W_LOG("Motor: LED set to %d\n", led);
-    return r;
+    K4W_LOG("Motor: LED set to %d\n", led);
+    return 0;
 }
 
-/* ═══ Tilt Control (with movement wait) ════════════════════ */
+/* ═══ Tilt Control ══════════════════════════════════════════ */
 int k4w_motor_set_tilt(freenect_device *dev, double angle) {
     (void)dev;
 
@@ -171,7 +153,6 @@ int k4w_motor_set_tilt(freenect_device *dev, double angle) {
 
     K4W_LOG("Motor: tilt %.0f°\n", angle);
 
-    /* Open device and keep it open for the entire operation */
     libusb_device_handle *usbdev = motor_open_device();
     if (!usbdev) {
         K4W_LOG("Motor: cannot open device for tilt\n");
@@ -252,12 +233,9 @@ int k4w_motor_get_tilt(freenect_device *dev, double *angle) {
     unsigned char buf[512] = {0};
     int transferred = 0;
 
-    int r = libusb_bulk_transfer(usbdev, 0x01,
-                                  (unsigned char *)&cmd, 16,
-                                  &transferred, 2000);
+    int r = libusb_bulk_transfer(usbdev, 0x01, (unsigned char *)&cmd, 16, &transferred, 2000);
     if (r != 0) { motor_close_device(usbdev); pthread_mutex_unlock(&g_motor_lock); return r; }
 
-    /* Read 104-byte accel data (magic=0x00000001, tilt at offset 28) */
     r = libusb_bulk_transfer(usbdev, 0x81, buf, 512, &transferred, 2000);
     if (r != 0) { motor_close_device(usbdev); pthread_mutex_unlock(&g_motor_lock); return r; }
 
@@ -270,7 +248,7 @@ int k4w_motor_get_tilt(freenect_device *dev, double *angle) {
         *angle = g_current_tilt;
     }
 
-    /* Read trailing 12-byte reply */
+    /* Read trailing reply */
     unsigned char reply_buf[512] = {0};
     libusb_bulk_transfer(usbdev, 0x81, reply_buf, 512, &transferred, 1000);
     motor_close_device(usbdev);
@@ -299,9 +277,7 @@ int k4w_motor_get_accel(freenect_device *dev, double *x, double *y, double *z) {
     unsigned char buf[512] = {0};
     int transferred = 0;
 
-    int r = libusb_bulk_transfer(usbdev, 0x01,
-                                  (unsigned char *)&cmd, 16,
-                                  &transferred, 500);
+    int r = libusb_bulk_transfer(usbdev, 0x01, (unsigned char *)&cmd, 16, &transferred, 500);
     if (r != 0) { motor_close_device(usbdev); pthread_mutex_unlock(&g_motor_lock); return r; }
 
     r = libusb_bulk_transfer(usbdev, 0x81, buf, 512, &transferred, 500);

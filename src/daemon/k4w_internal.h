@@ -27,6 +27,7 @@ void k4w_audio_pulse_close(void *sink);
 
 /* ─── Motor ───────────────────────────────────────── */
 int  k4w_motor_init(freenect_context *ctx);
+void k4w_motor_set_device(freenect_device *dev);
 int  k4w_motor_set_led(freenect_device *dev, int color);
 int  k4w_motor_set_tilt(freenect_device *dev, double angle);
 int  k4w_motor_get_tilt(freenect_device *dev, double *angle);
@@ -69,7 +70,10 @@ typedef struct {
     char              v4l2_device[128];
     char              audio_source[128];
     volatile bool     running;
+    volatile bool     motor_paused;     /* true while motor commands are in progress */
     pthread_mutex_t   lock;
+    char              usb_if2_path[64];  /* sysfs path for audio IF2 (dynamic) */
+    char              usb_if3_path[64];  /* sysfs path for audio IF3 (dynamic) */
 } k4w_state_t;
 
 void k4w_socket_set_state(k4w_state_t *state);
@@ -77,6 +81,7 @@ void k4w_socket_init_motor(void);
 int  k4w_kinect_init(k4w_state_t *state, const k4w_config_t *cfg);
 int  k4w_kinect_run(k4w_state_t *state);
 int  k4w_kinect_start_audio(k4w_state_t *state);
+void k4w_kinect_set_state(k4w_state_t *state);
 void k4w_kinect_audio_pause(void);
 void k4w_kinect_audio_resume(void);
 void k4w_kinect_stop(k4w_state_t *state);

@@ -4,6 +4,7 @@
 #include <libusb.h>
 #include <string.h>
 #include <unistd.h>
+#include <dirent.h>
 
 static k4w_state_t *g_state = NULL;
 static pthread_t g_audio_tid;
@@ -56,10 +57,58 @@ static void audio_cb(freenect_device *dev, int num_samples,
 /* ─── Audio Thread (ALSA capture) ────────────────────── */
 static snd_pcm_t *g_pcm = NULL;
 static char g_alsa_device[32] = {0};
+static char g_usb_if2_path[64] = {0};
+static char g_usb_if3_path[64] = {0};
+
+void k4w_kinect_set_state(k4w_state_t *state) { g_state = state; }
 
 static void *audio_thread_func(void *arg) {
     k4w_state_t *state = (k4w_state_t *)arg;
     K4W_LOG("Audio thread starting (ALSA capture)\n");
+
+    /* Discover Kinect audio USB paths dynamically */
+    if (g_usb_if2_path[0] == '\0') {
+        /* Scan /sys/bus/usb/devices for Kinect composite device */
+       DIR *dir = opendir("/sys/bus/usb/devices");
+        if (dir) {
+            struct dirent *ent;
+            while ((ent = readdir(dir)) != NULL) {
+                if (ent->d_name[0] == '.') continue;
+                char vid_path[256], pid_path[256];
+                char vid[8] = {0}, pid[8] = {0};
+                snprintf(vid_path, sizeof(vid_path), "/sys/bus/usb/devices/%s/idVendor", ent->d_name);
+                snprintf(pid_path, sizeof(pid_path), "/sys/bus/usb/devices/%s/idProduct", ent->d_name);
+                FILE *fv = fopen(vid_path, "r");
+                if (fv) { fgets(vid, sizeof(vid), fv); fclose(fv); }
+                FILE *fp = fopen(pid_path, "r");
+                if (fp) { fgets(pid, sizeof(pid), fp); fclose(fp); }
+                /* Match Kinect audio device 045e:02bb */
+                if (strstr(vid, "045e") && strstr(pid, "02bb")) {
+                    snprintf(g_usb_if2_path, sizeof(g_usb_if2_path),
+                             "/sys/bus/usb/drivers/snd-usb-audio/bind");
+                    snprintf(g_usb_if3_path, sizeof(g_usb_if3_path),
+                             "/sys/bus/usb/drivers/snd-usb-audio/bind");
+                    /* Store the actual USB interface paths for bind */
+                    /* Format: bus-dev:interface */
+                    char if2[64], if3[64];
+                    snprintf(if2, sizeof(if2), "%s:1.2", ent->d_name);
+                    snprintf(if3, sizeof(if3), "%s:1.3", ent->d_name);
+                    /* Store for later use by audio_resume */
+                    strncpy(g_usb_if2_path, if2, sizeof(g_usb_if2_path) - 1);
+                    strncpy(g_usb_if3_path, if3, sizeof(g_usb_if3_path) - 1);
+                    K4W_LOG("Audio: discovered USB paths: %s, %s\n", g_usb_if2_path, g_usb_if3_path);
+                    break;
+                }
+            }
+            closedir(dir);
+        }
+        /* Fallback to hardcoded if discovery failed */
+        if (g_usb_if2_path[0] == '\0') {
+            strncpy(g_usb_if2_path, "1-6.1:1.2", sizeof(g_usb_if2_path) - 1);
+            strncpy(g_usb_if3_path, "1-6.1:1.3", sizeof(g_usb_if3_path) - 1);
+            K4W_LOG("Audio: using fallback USB paths: %s, %s\n", g_usb_if2_path, g_usb_if3_path);
+        }
+    }
 
     /* Rebind snd-usb-audio to Kinect audio IFs if not already bound */
     {
@@ -80,10 +129,10 @@ static void *audio_thread_func(void *arg) {
         if (needs_rebind) {
             K4W_LOG("Audio: rebinding snd-usb-audio to Kinect IFs...\n");
             FILE *f1 = fopen("/sys/bus/usb/drivers/snd-usb-audio/bind", "w");
-            if (f1) { fprintf(f1, "1-6.1:1.2\n"); fclose(f1); }
+            if (f1) { fprintf(f1, "%s\n", g_usb_if2_path); fclose(f1); }
             FILE *f2 = fopen("/sys/bus/usb/drivers/snd-usb-audio/bind", "w");
-            if (f2) { fprintf(f2, "1-6.1:1.3\n"); fclose(f2); }
-            usleep(2000000); /* 2s for driver to settle */
+            if (f2) { fprintf(f2, "%s\n", g_usb_if3_path); fclose(f2); }
+            usleep(3000000); /* 3s for driver to settle */
         }
     }
 
@@ -247,19 +296,33 @@ int k4w_kinect_start_audio(k4w_state_t *state) {
 void k4w_kinect_audio_pause(void) {
     g_audio_paused = true;
     g_audio_dropped = false;
+    /* Set motor_paused flag to stop main loop from re-opening devices */
+    if (g_state) g_state->motor_paused = true;
     K4W_LOG("Audio: pause requested, waiting for drop...\n");
-    for (int i = 0; i < 20 && !g_audio_dropped; i++) usleep(50000);
+    for (int i = 0; i < 60 && !g_audio_dropped; i++) usleep(50000); /* 3s timeout */
+    /* Fully close ALSA to release USB interface for motor */
+    if (g_pcm && g_audio_dropped) {
+        snd_pcm_close(g_pcm);
+        g_pcm = NULL;
+        K4W_LOG("Audio: ALSA closed for motor access\n");
+    }
+    /* Stop freenect_sync to release ALL USB interfaces on 02bb (motor IF0/IF1 included) */
+    K4W_LOG("Audio: stopping freenect_sync for motor access...\n");
+    freenect_sync_stop();
+    usleep(1000000); /* 1s for libusb to fully release */
     K4W_LOG("Audio: paused (dropped=%d)\n", g_audio_dropped);
 }
 
 void k4w_kinect_audio_resume(void) {
-    /* Rebind snd-usb-audio to Kinect audio IFs */
+    /* Clear motor_paused flag so main loop can re-open devices */
+    if (g_state) g_state->motor_paused = false;
+    /* Rebind snd-usb-audio to Kinect audio IFs using discovered paths */
     FILE *f1 = fopen("/sys/bus/usb/drivers/snd-usb-audio/bind", "w");
-    if (f1) { fprintf(f1, "1-6.1:1.2\n"); fclose(f1); }
+    if (f1) { fprintf(f1, "%s\n", g_usb_if2_path); fclose(f1); }
     FILE *f2 = fopen("/sys/bus/usb/drivers/snd-usb-audio/bind", "w");
-    if (f2) { fprintf(f2, "1-6.1:1.3\n"); fclose(f2); }
+    if (f2) { fprintf(f2, "%s\n", g_usb_if3_path); fclose(f2); }
     /* Wait for driver to rebind and ALSA card to appear */
-    usleep(2000000);
+    usleep(3000000); /* 3s for driver to settle */
     g_audio_paused = false;
     K4W_LOG("Audio: resumed after motor (rebind sent)\n");
 }
@@ -352,6 +415,11 @@ int k4w_kinect_run(k4w_state_t *state) {
     bool device_ok = true;
 
     while (state->running) {
+        /* Skip sync polling while motor commands are in progress */
+        if (state->motor_paused) {
+            usleep(100000);
+            continue;
+        }
         /* Poll depth */
         void *depth_data = NULL;
         uint32_t depth_ts = 0;
