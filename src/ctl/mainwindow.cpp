@@ -435,20 +435,47 @@ void MainWindow::onStatusBarClicked() {
     onStartDaemon();
 }
 
+/* Find Kinect audio USB interface paths dynamically */
+static QString findKinectUSBBind() {
+    QDir sysDir("/sys/bus/usb/devices");
+    QStringList if2Paths, if3Paths;
+    for (const auto &entry : sysDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        QString vidPath = QString("/sys/bus/usb/devices/%1/idVendor").arg(entry);
+        QString pidPath = QString("/sys/bus/usb/devices/%1/idProduct").arg(entry);
+        QFile fv(vidPath), fp(pidPath);
+        if (!fv.open(QIODevice::ReadOnly) || !fp.open(QIODevice::ReadOnly)) continue;
+        QString vid = fv.readAll().trimmed();
+        QString pid = fp.readAll().trimmed();
+        if (vid == "045e" && pid == "02bb") {
+            /* Found Kinect audio device — build bind commands */
+            QString if2 = QString("%1:1.2").arg(entry);
+            QString if3 = QString("%1:1.3").arg(entry);
+            return QString(
+                "echo %1 > /sys/bus/usb/drivers/snd-usb-audio/bind 2>/dev/null; "
+                "echo %2 > /sys/bus/usb/drivers/snd-usb-audio/bind 2>/dev/null"
+            ).arg(if2, if3);
+        }
+    }
+    /* Fallback to hardcoded */
+    return "echo 1-6.1:1.2 > /sys/bus/usb/drivers/snd-usb-audio/bind 2>/dev/null; "
+           "echo 1-6.1:1.3 > /sys/bus/usb/drivers/snd-usb-audio/bind 2>/dev/null";
+}
+
 void MainWindow::onStartDaemon() {
     if (isConnected()) return;
     m_isStarting = true;
 
-    /* Launch daemon with sudo for proper USB/ALSA permissions */
+    /* Clean stale files */
     QFile::remove("/tmp/k4w.pid");
     QFile::remove("/tmp/k4w.sock");
+    QFile::remove("/dev/shm/k4w_video");
+    QFile::remove("/dev/shm/k4w_depth");
+    QFile::remove("/dev/shm/k4w_audio");
 
-    /* Rebind audio driver first (needs root) */
-    QProcess::execute("pkexec", {"bash", "-c",
-        "echo 1-6.1:1.2 > /sys/bus/usb/drivers/snd-usb-audio/bind 2>/dev/null; "
-        "echo 1-6.1:1.3 > /sys/bus/usb/drivers/snd-usb-audio/bind 2>/dev/null"});
+    /* Rebind audio driver (dynamic paths) */
+    QProcess::execute("pkexec", {"bash", "-c", findKinectUSBBind().toStdString().c_str()});
 
-    /* Start daemon with pkexec for graphical sudo */
+    /* Start daemon */
     QProcess::startDetached("pkexec", {"/usr/local/bin/k4wd"});
 
     m_startDaemonBtn->setEnabled(false);
@@ -497,14 +524,32 @@ void MainWindow::onResetDaemon() {
         }
     }
 
-    /* Clean stale files */
+    /* Clean all stale files */
     QFile::remove("/tmp/k4w.pid");
     QFile::remove("/tmp/k4w.sock");
+    QFile::remove("/dev/shm/k4w_video");
+    QFile::remove("/dev/shm/k4w_depth");
+    QFile::remove("/dev/shm/k4w_audio");
+    QFile::remove("/dev/shm/k4w_skeleton");
 
-    /* Rebind audio driver (needs root) */
+    /* Reset USB device + rebind audio (needs root) */
+    /* This forces firmware re-upload on next k4wd start */
     QProcess::execute("pkexec", {"bash", "-c",
-        "echo 1-6.1:1.2 > /sys/bus/usb/drivers/snd-usb-audio/bind 2>/dev/null; "
-        "echo 1-6.1:1.3 > /sys/bus/usb/drivers/snd-usb-audio/bind 2>/dev/null"});
+        /* Find and reset Kinect USB device */
+        "for d in /sys/bus/usb/devices/*/; do"
+        "  vid=$(cat $d/idVendor 2>/dev/null);"
+        "  pid=$(cat $d/idProduct 2>/dev/null);"
+        "  if [ \"$vid\" = \"045e\" ] && [ \"$pid\" = \"02bb\" ]; then"
+        "    dev=$(basename $d);"
+        "    echo $dev > /sys/bus/usb/drivers/usb/unbind 2>/dev/null;"
+        "    sleep 2;"
+        "    echo $dev > /sys/bus/usb/drivers/usb/bind 2>/dev/null;"
+        "    sleep 3;"
+        "  fi;"
+        "done;"
+        /* Rebind snd-usb-audio */
+    });
+    QProcess::execute("pkexec", {"bash", "-c", findKinectUSBBind().toStdString().c_str()});
 
     /* Start daemon fresh */
     QProcess::startDetached("pkexec", {"/usr/local/bin/k4wd"});
@@ -943,9 +988,7 @@ void MainWindow::setupUI() {
         m_micStatusLabel->setText("Re-bindando driver...");
         m_micStatusLabel->setStyleSheet("font-size: 12px; color: #f9e2af;");
         m_audioStatusDot->setStyleSheet("background: #f9e2af; border: 1.5px solid #df8e1d; border-radius: 5px;");
-        QProcess::execute("pkexec", {"bash", "-c",
-            "echo 1-6.1:1.2 > /sys/bus/usb/drivers/snd-usb-audio/bind 2>/dev/null; "
-            "echo 1-6.1:1.3 > /sys/bus/usb/drivers/snd-usb-audio/bind 2>/dev/null"});
+        QProcess::execute("pkexec", {"bash", "-c", findKinectUSBBind().toStdString().c_str()});
         QTimer::singleShot(3000, this, [this]() {
             m_micBindBtn->setEnabled(true);
             m_micBindBtn->setText("Bind audio driver");
