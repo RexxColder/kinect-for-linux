@@ -8,6 +8,9 @@
 #include <QDateTime>
 #include <QPainter>
 #include <QFileDialog>
+#include <QMessageBox>
+#include <QInputDialog>
+#include <QFile>
 #include <QProcess>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -116,6 +119,8 @@ void SensorPollThread::setEnabled(bool on) {
 
 void SensorPollThread::run() {
     fprintf(stderr, "[SensorPoll] Thread started\n");
+    int failCount = 0;
+    const int FAIL_THRESHOLD = 3;
     while (true) {
         bool enabled;
         {
@@ -127,10 +132,12 @@ void SensorPollThread::run() {
         fprintf(stderr, "[SensorPoll] Connecting...\n");
         QLocalSocket sock;
         sock.connectToServer("/tmp/k4w.sock");
-        if (!sock.waitForConnected(500)) {
-            fprintf(stderr, "[SensorPoll] Connect FAILED\n");
-            emit daemonStatus(false);
-            usleep(1000000);
+        if (!sock.waitForConnected(15000)) {
+            failCount++;
+            fprintf(stderr, "[SensorPoll] Connect FAILED (fail %d)\n", failCount);
+            if (failCount >= FAIL_THRESHOLD)
+                emit daemonStatus(false);
+            usleep(2000000);
             continue;
         }
         fprintf(stderr, "[SensorPoll] Connected, sending STATUS\n");
@@ -138,22 +145,27 @@ void SensorPollThread::run() {
         /* Send STATUS command — lightweight, no USB motor access */
         int cmd[2] = { 2, 0 }; /* K4W_CMD_STATUS = 2 */
         sock.write((const char *)cmd, sizeof(cmd));
-        if (!sock.waitForBytesWritten(500)) { sock.disconnectFromServer(); usleep(500000); continue; }
+        if (!sock.waitForBytesWritten(1000)) { sock.disconnectFromServer(); failCount++; usleep(1000000); continue; }
 
-        if (sock.waitForReadyRead(2000)) {
+        if (sock.waitForReadyRead(5000)) {
             char buf[256] = {0};
             qint64 n = sock.read(buf, sizeof(buf));
             fprintf(stderr, "[SensorPoll] Got %zd bytes\n", n);
+            fflush(stderr);
             if (n >= (int)sizeof(k4w_status_t)) {
                 k4w_status_t *resp = (k4w_status_t *)buf;
                 fprintf(stderr, "[SensorPoll] tilt=%.1f ax=%.2f ay=%.2f az=%.2f\n",
                         resp->tilt_deg, resp->accel_x, resp->accel_y, resp->accel_z);
                 emit dataReady(resp->accel_x, resp->accel_y, resp->accel_z,
                                resp->tilt_deg, resp->ok);
+                failCount = 0;
                 emit daemonStatus(true);
             }
         } else {
-            fprintf(stderr, "[SensorPoll] Read TIMEOUT\n");
+            failCount++;
+            fprintf(stderr, "[SensorPoll] Read TIMEOUT (fail %d)\n", failCount);
+            if (failCount >= FAIL_THRESHOLD)
+                emit daemonStatus(false);
         }
         sock.disconnectFromServer();
         usleep(5000000); /* Poll every 5s — ACCEL shares USB with audio */
@@ -217,29 +229,8 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_reconnectTimer, &QTimer::timeout, this, &MainWindow::onReconnectTick);
     m_reconnectTimer->start(2000);
 
-    /* Motor tilt debounce + cooldown */
+    /* Motor state */
     m_tiltBusy = false;
-    m_tiltDebounce = new QTimer(this);
-    m_tiltDebounce->setSingleShot(true);
-    connect(m_tiltDebounce, &QTimer::timeout, this, &MainWindow::onTiltDebounce);
-
-    m_tiltCooldown = new QTimer(this);
-    m_tiltCooldown->setSingleShot(true);
-    m_tiltCooldown->setInterval(2000);  /* 2s cooldown between movements */
-
-    /* Countdown timer for visual feedback */
-    m_tiltCountdownSec = 0;
-    m_tiltCountdownTimer = new QTimer(this);
-    m_tiltCountdownTimer->setInterval(1000);
-    connect(m_tiltCountdownTimer, &QTimer::timeout, this, [this]() {
-        m_tiltCountdownSec--;
-        if (m_tiltCountdownSec <= 0) {
-            m_tiltCountdownTimer->stop();
-            m_tiltCooldownLabel->setText("");
-        } else {
-            m_tiltCooldownLabel->setText(QString("Cooldown: %1s").arg(m_tiltCountdownSec));
-        }
-    });
 
     /* Check audio device status on startup */
     QTimer::singleShot(500, this, [this]() {
@@ -262,10 +253,6 @@ MainWindow::MainWindow(QWidget *parent)
         }
     });
 
-    /* Skeleton: update from SHM every 3rd frame (~100ms at 30fps) */
-    m_skeletonFrameSkip = 3;
-    m_skeletonFrameCounter = 0;
-
     m_recordTimerTick = new QTimer(this);
     connect(m_recordTimerTick, &QTimer::timeout, this, [this]() {
         qint64 ms = m_recordElapsed.elapsed();
@@ -277,14 +264,16 @@ MainWindow::MainWindow(QWidget *parent)
     m_socket = new QLocalSocket(this);
 
     /* Skeleton Tracker */
-    m_tracker = new SkeletonTracker;
-    m_skeletonProcess = nullptr;
+    m_tracker = new SkeletonTracker(this);
 
     /* Sensor Poll Thread — only for daemon detection, no sensor data */
     m_sensorPollThread = new SensorPollThread(this);
     m_sensorPollThread->setEnabled(true);
     m_sensorPollThread->start();
     connect(m_sensorPollThread, &SensorPollThread::daemonStatus, this, [this](bool online) {
+        fprintf(stderr, "[App] daemonStatus(%s) — current m_daemonOnline=%d\n",
+                online ? "true" : "false", m_daemonOnline);
+        fflush(stderr);
         if (online && !m_daemonOnline) {
             fprintf(stderr, "[App] Daemon came ONLINE\n");
             m_daemonOnline = true;
@@ -331,12 +320,9 @@ MainWindow::MainWindow(QWidget *parent)
                 "QPushButton:pressed { background:#74c76a; }");
             m_accelValue->setText("—");
             m_tiltValueSensor->setText("—");
-            /* Disable shutdown and motor buttons when offline */
+            /* Disable shutdown when offline */
             m_shutdownDaemonBtn->setEnabled(false);
             m_shutdownDaemonBtn->setText("Shutdown");
-            m_tiltApplyBtn->setEnabled(false);
-            m_tiltResetBtn->setEnabled(false);
-            m_tiltSlider->setEnabled(false);
         }
     });
 
@@ -363,13 +349,6 @@ MainWindow::~MainWindow() {
     m_frameTimer->stop();
     m_reconnectTimer->stop();
     m_recordTimerTick->stop();
-    if (m_skeletonProcess && m_skeletonProcess->state() != QProcess::NotRunning) {
-        m_skeletonProcess->terminate();
-        m_skeletonProcess->waitForFinished(3000);
-        if (m_skeletonProcess->state() != QProcess::NotRunning)
-            m_skeletonProcess->kill();
-    }
-    delete m_skeletonProcess;
 }
 
 /* ─── Connection ──────────────────────────────────────── */
@@ -485,8 +464,55 @@ static QString findKinectUSBBind() {
            "echo 1-6.1:1.3 > /sys/bus/usb/drivers/snd-usb-audio/bind 2>/dev/null";
 }
 
+bool MainWindow::promptRootPassword() {
+    if (!m_rootPassword.isEmpty()) return true;
+    bool ok;
+    QString pass = QInputDialog::getText(this, "Root access",
+        "Password de root:", QLineEdit::Password, QString(), &ok);
+    if (!ok || pass.isEmpty()) return false;
+    QProcess p;
+    p.start("bash", {"-c", QString("echo '%1' | sudo -S -v 2>&1").arg(pass.replace("'", "'\\''"))});
+    p.waitForFinished(5000);
+    if (p.exitCode() != 0) {
+        QMessageBox::warning(this, "Error", "Password incorrecto");
+        return false;
+    }
+    m_rootPassword = pass;
+    return true;
+}
+
+void MainWindow::sudoExec(const QStringList &args) {
+    QString escaped = m_rootPassword;
+    escaped.replace("'", "'\\''");
+    /* Write command script directly */
+    QFile script("/tmp/.k4w_sudo.sh");
+    script.open(QIODevice::WriteOnly | QIODevice::Text);
+    script.write(args.join(" ").toUtf8());
+    script.close();
+    chmod("/tmp/.k4w_sudo.sh", 0600);
+    QProcess::execute("bash", {"-c",
+        QString("echo '%1' | sudo -S bash /tmp/.k4w_sudo.sh 2>/dev/null").arg(escaped)});
+    script.remove();
+}
+
+void MainWindow::sudoStartDetached(const QString &program, const QStringList &args) {
+    QString escaped = m_rootPassword;
+    escaped.replace("'", "'\\''");
+    /* Write command script directly */
+    QFile script("/tmp/.k4w_sudo.sh");
+    script.open(QIODevice::WriteOnly | QIODevice::Text);
+    QString allCmd = program;
+    for (const QString &a : args) allCmd += " " + a;
+    script.write(allCmd.toUtf8());
+    script.close();
+    chmod("/tmp/.k4w_sudo.sh", 0600);
+    QProcess::startDetached("bash", {"-c",
+        QString("echo '%1' | sudo -S bash /tmp/.k4w_sudo.sh 2>/dev/null").arg(escaped)});
+}
+
 void MainWindow::onStartDaemon() {
     if (isConnected()) return;
+    if (!promptRootPassword()) return;
     m_isStarting = true;
 
     /* Clean stale files */
@@ -496,11 +522,17 @@ void MainWindow::onStartDaemon() {
     QFile::remove("/dev/shm/k4w_depth");
     QFile::remove("/dev/shm/k4w_audio");
 
-    /* Rebind audio driver (dynamic paths) */
-    QProcess::execute("pkexec", {"bash", "-c", findKinectUSBBind().toStdString().c_str()});
-
-    /* Start daemon */
-    QProcess::startDetached("pkexec", {"/usr/local/bin/k4wd"});
+    /* Everything in ONE sudo call: v4l2loopback + kill pipewire + rebind audio + start daemon + restart pipewire */
+    QString setupScript =
+        "modprobe v4l2loopback video_nr=100 card_label='KinectCam' exclusive_caps=1 2>/dev/null; "
+        "killall -9 pipewire-pulse 2>/dev/null; "
+        "sleep 1; "
+        + findKinectUSBBind() + "; "
+        "sleep 1; "
+        "/usr/local/bin/k4wd & "
+        "sleep 4; "
+        "pipewire-pulse &";
+    sudoStartDetached("bash", {"-c", setupScript.toStdString().c_str()});
 
     m_startDaemonBtn->setEnabled(false);
     m_startDaemonBtn->setText("Iniciando...");
@@ -514,6 +546,7 @@ void MainWindow::onStartDaemon() {
 }
 
 void MainWindow::onResetDaemon() {
+    if (!promptRootPassword()) return;
     m_isStarting = true;
     m_resetDaemonBtn->setEnabled(false);
     m_resetDaemonBtn->setText("Reiniciando...");
@@ -535,20 +568,12 @@ void MainWindow::onResetDaemon() {
             pid_t pid = pidLine.toInt();
             if (pid > 0) {
                 kill(pid, SIGTERM);
-                /* Wait up to 2s for graceful shutdown */
-                for (int i = 0; i < 20 && kill(pid, 0) == 0; i++) {
-                    usleep(100000);
-                }
-                /* Force kill if still alive */
-                if (kill(pid, 0) == 0) {
-                    kill(pid, SIGKILL);
-                    usleep(200000);
-                }
+                for (int i = 0; i < 20 && kill(pid, 0) == 0; i++) usleep(100000);
+                if (kill(pid, 0) == 0) { kill(pid, SIGKILL); usleep(200000); }
             }
         }
     }
 
-    /* Clean all stale files */
     QFile::remove("/tmp/k4w.pid");
     QFile::remove("/tmp/k4w.sock");
     QFile::remove("/dev/shm/k4w_video");
@@ -556,10 +581,9 @@ void MainWindow::onResetDaemon() {
     QFile::remove("/dev/shm/k4w_audio");
     QFile::remove("/dev/shm/k4w_skeleton");
 
-    /* Reset USB device + rebind audio (needs root) */
-    /* This forces firmware re-upload on next k4wd start */
-    QProcess::execute("pkexec", {"bash", "-c",
-        /* Find and reset Kinect USB device */
+    /* Everything in ONE sudo call */
+    QString resetScript =
+        /* Reset Kinect USB device */
         "for d in /sys/bus/usb/devices/*/; do"
         "  vid=$(cat $d/idVendor 2>/dev/null);"
         "  pid=$(cat $d/idProduct 2>/dev/null);"
@@ -570,13 +594,13 @@ void MainWindow::onResetDaemon() {
         "    echo $dev > /sys/bus/usb/drivers/usb/bind 2>/dev/null;"
         "    sleep 3;"
         "  fi;"
-        "done;"
-        /* Rebind snd-usb-audio */
-    });
-    QProcess::execute("pkexec", {"bash", "-c", findKinectUSBBind().toStdString().c_str()});
-
-    /* Start daemon fresh */
-    QProcess::startDetached("pkexec", {"/usr/local/bin/k4wd"});
+        "done; "
+        + findKinectUSBBind() + "; "
+        "sleep 1; "
+        "/usr/local/bin/k4wd & "
+        "sleep 4; "
+        "pipewire-pulse &";
+    sudoStartDetached("bash", {"-c", resetScript.toStdString().c_str()});
 
     m_startDaemonBtn->setEnabled(false);
     m_startDaemonBtn->setText("Iniciando...");
@@ -725,12 +749,8 @@ void MainWindow::onRefreshFrame() {
     if (!frame.isNull()) {
         /* Skeleton only in Supercam mode: update from SHM every N frames, draw every frame */
         if (m_cameraMode == 3) {
-            m_skeletonFrameCounter++;
-            if (m_skeletonFrameCounter >= m_skeletonFrameSkip) {
-                m_skeletonFrameCounter = 0;
-                m_tracker->updateSkeletons();
-            }
-            m_tracker->drawSkeleton(frame);
+            m_tracker->updateFromSHM();
+            frame = m_tracker->drawSkeleton(frame);
         }
         m_mainView->setPixmap(QPixmap::fromImage(frame).scaled(
             m_mainView->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
@@ -748,47 +768,32 @@ void MainWindow::onRefreshFrame() {
 void MainWindow::onModeChanged(int index) {
     m_cameraMode = index;
     if (index == 3) {
-        /* Start skeleton tracker process if not running */
-        if (!m_skeletonProcess || m_skeletonProcess->state() == QProcess::NotRunning) {
-            delete m_skeletonProcess;
-            m_skeletonProcess = new QProcess(this);
-            m_skeletonProcess->setProgram("/tmp/mediapipe-venv/bin/python3");
-            m_skeletonProcess->setArguments({"/usr/local/bin/skeleton_tracker.py"});
-            m_skeletonProcess->setProcessChannelMode(QProcess::ForwardedChannels);
-            m_skeletonProcess->start();
-        }
-    } else {
-        /* Stop skeleton tracker when leaving Supercam */
-        if (m_skeletonProcess && m_skeletonProcess->state() != QProcess::NotRunning) {
-            m_skeletonProcess->terminate();
-            m_skeletonProcess->waitForFinished(3000);
-            if (m_skeletonProcess->state() != QProcess::NotRunning)
-                m_skeletonProcess->kill();
+        /* Load ONNX models for skeleton tracking */
+        if (!m_tracker->isEnabled()) return;
+        QString modelDir = "/usr/local/share/k4w-models";
+        QString detectPath = modelDir + "/person_detection_mediapipe_2023mar.onnx";
+        QString posePath = modelDir + "/pose_estimation_mediapipe_2023mar_onnx.onnx";
+        if (!m_tracker->loadModels(detectPath, posePath)) {
+            QMessageBox::warning(this, "Skeleton", "No se pudieron cargar los modelos ONNX.\n"
+                                 "Ejecute: sudo setup.sh");
+            m_cameraMode = 0;
+            m_modeCombo->setCurrentIndex(0);
         }
     }
 }
 
-/* ─── Motor ───────────────────────────────────────────── */
-void MainWindow::onMotorTilt(int angle) {
-    m_tiltValue->setText(QString("%1°").arg(angle));
-    int clamped = qBound(-31, angle, 31);
-    m_kinectUp->setStyleSheet(QString("background:transparent; transform: rotate(%1deg);").arg(-clamped));
-    if (!isConnected()) return;
-
-    /* Store target and restart debounce timer (800ms cooldown) */
-    m_tiltTarget = clamped;
-    m_tiltDebounce->start(800);
-}
-
-void MainWindow::onTiltDebounce() {
-    /* Only auto-send if user is NOT clicking Apply */
-    if (m_tiltBusy || m_tiltCooldown->isActive()) return;
-}
+/* ─── Connection ──────────────────────────────────────── */
 
 static bool sendDaemonCmd(int cmd_type, int cmd_arg, k4w_status_t *resp) {
     /* Use raw POSIX sockets — works from any thread without event loop */
+    fprintf(stderr, "[CMD] sendDaemonCmd type=%d arg=%d\n", cmd_type, cmd_arg);
+    fflush(stderr);
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) return false;
+    if (fd < 0) {
+        fprintf(stderr, "[CMD] socket() failed: %s\n", strerror(errno));
+        fflush(stderr);
+        return false;
+    }
 
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
@@ -799,9 +804,13 @@ static bool sendDaemonCmd(int cmd_type, int cmd_arg, k4w_status_t *resp) {
     struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        fprintf(stderr, "[CMD] connect() failed: %s\n", strerror(errno));
+        fflush(stderr);
         close(fd);
         return false;
     }
+    fprintf(stderr, "[CMD] connected, sending cmd=%d arg=%d\n", cmd_type, cmd_arg);
+    fflush(stderr);
 
     /* Send command */
     int cmd[2] = { cmd_type, cmd_arg };
@@ -811,13 +820,16 @@ static bool sendDaemonCmd(int cmd_type, int cmd_arg, k4w_status_t *resp) {
     }
 
     /* Motor commands take ~8s, use 20s read timeout */
-    int read_timeout = (cmd_type == 0) ? 20 : 5;  /* K4W_CMD_TILT = 0 */
+    int read_timeout = (cmd_type == K4W_CMD_STATUS) ? 5 : 20;
     struct timeval rtv = { .tv_sec = read_timeout, .tv_usec = 0 };
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rtv, sizeof(rtv));
 
     char buf[256] = {0};
     ssize_t n = read(fd, buf, sizeof(buf));
     close(fd);
+
+    fprintf(stderr, "[CMD] read returned %zd bytes (need %zu)\n", n, sizeof(k4w_status_t));
+    fflush(stderr);
 
     if (n >= (int)sizeof(k4w_status_t)) {
         memcpy(resp, buf, sizeof(k4w_status_t));
@@ -826,101 +838,7 @@ static bool sendDaemonCmd(int cmd_type, int cmd_arg, k4w_status_t *resp) {
     return false;
 }
 
-void MainWindow::onTiltApply() {
-    if (m_tiltBusy || m_tiltCooldown->isActive()) return;
-    if (!isConnected()) return;
-
-    m_tiltBusy = true;
-    updateStatusDots();
-    m_tiltApplyBtn->setEnabled(false);
-    m_tiltApplyBtn->setText("Moviendo...");
-    m_tiltResetBtn->setEnabled(false);
-    m_tiltSlider->setEnabled(false);
-
-    int angle = qBound(-15, m_tiltSlider->value(), 15);
-
-    /* Run motor command in background thread to avoid blocking GUI */
-    QThread *thread = QThread::create([this, angle]() {
-        k4w_status_t resp;
-        bool ok = sendDaemonCmd(K4W_CMD_TILT, angle, &resp);
-        /* Update UI on main thread */
-        QMetaObject::invokeMethod(this, [this, ok, resp]() {
-            if (ok) {
-                m_tiltValue->setText(QString("%1°").arg((int)resp.tilt_deg));
-                m_tiltValueSensor->setText(QString("%1°").arg((int)resp.tilt_deg));
-                m_accelValue->setText(QString("X:%1 Y:%2 Z:%3").arg(resp.accel_x, 0, 'f', 2).arg(resp.accel_y, 0, 'f', 2).arg(resp.accel_z, 0, 'f', 2));
-                int actual = qBound(-31, (int)resp.tilt_deg, 31);
-                m_kinectUp->setStyleSheet(
-                    QString("background:transparent; transform: rotate(%1deg);").arg(-actual));
-                m_tiltSlider->setValue(actual);
-            }
-            m_tiltSlider->setEnabled(true);
-            m_tiltApplyBtn->setEnabled(true);
-            m_tiltApplyBtn->setText("Aplicar");
-            m_tiltResetBtn->setEnabled(true);
-            m_tiltBusy = false;
-            updateStatusDots();
-            m_tiltCooldown->start();
-            m_tiltCountdownSec = 2;
-            m_tiltCooldownLabel->setText("Cooldown: 2s");
-            m_tiltCountdownTimer->start();
-        });
-    });
-    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
-    thread->start();
-}
-
-void MainWindow::onTiltReset() {
-    if (m_tiltBusy || m_tiltCooldown->isActive()) return;
-    if (!isConnected()) return;
-
-    m_tiltBusy = true;
-    updateStatusDots();
-    m_tiltApplyBtn->setEnabled(false);
-    m_tiltResetBtn->setEnabled(false);
-    m_tiltResetBtn->setText("Reseteando...");
-    m_tiltSlider->setEnabled(false);
-
-    /* Run motor command in background thread */
-    QThread *thread = QThread::create([this]() {
-        k4w_status_t resp;
-        bool ok = sendDaemonCmd(K4W_CMD_TILT, 0, &resp);
-        QMetaObject::invokeMethod(this, [this, ok, resp]() {
-            if (ok) {
-                m_tiltValue->setText(QString("%1°").arg((int)resp.tilt_deg));
-                m_tiltValueSensor->setText(QString("%1°").arg((int)resp.tilt_deg));
-                m_accelValue->setText(QString("X:%1 Y:%2 Z:%3").arg(resp.accel_x, 0, 'f', 2).arg(resp.accel_y, 0, 'f', 2).arg(resp.accel_z, 0, 'f', 2));
-                m_kinectUp->setStyleSheet(
-                    QString("background:transparent; transform: rotate(0deg);"));
-                m_tiltSlider->setValue(0);
-            }
-            m_tiltSlider->setEnabled(true);
-            m_tiltApplyBtn->setEnabled(true);
-            m_tiltApplyBtn->setText("Aplicar");
-            m_tiltResetBtn->setEnabled(true);
-            m_tiltResetBtn->setText("Reset 0°");
-            m_tiltBusy = false;
-            updateStatusDots();
-            m_tiltCooldown->start();
-            m_tiltCountdownSec = 2;
-            m_tiltCooldownLabel->setText("Cooldown: 2s");
-            m_tiltCountdownTimer->start();
-        });
-    });
-    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
-    thread->start();
-
-    m_tiltSlider->setEnabled(true);
-    m_tiltApplyBtn->setEnabled(true);
-    m_tiltResetBtn->setEnabled(true);
-    m_tiltResetBtn->setText("Reset 0°");
-    m_tiltBusy = false;
-    updateStatusDots();
-    m_tiltCooldown->start();
-    m_tiltCountdownSec = 2;
-    m_tiltCooldownLabel->setText("Cooldown: 2s");
-    m_tiltCountdownTimer->start();
-}
+/* ─── Motor slots removed — buttons now use inline lambdas ─── */
 
 /* ─── Capture / Record ────────────────────────────────── */
 void MainWindow::onCapturePhoto() {
@@ -1134,7 +1052,7 @@ void MainWindow::setupUI() {
         m_micStatusLabel->setText("Re-bindando driver...");
         m_micStatusLabel->setStyleSheet("font-size: 12px; color: #f9e2af;");
         m_audioStatusDot->setStyleSheet("background: #f9e2af; border: 1.5px solid #df8e1d; border-radius: 5px;");
-        QProcess::execute("pkexec", {"bash", "-c", findKinectUSBBind().toStdString().c_str()});
+        sudoExec({"bash", "-c", findKinectUSBBind().toStdString().c_str()});
         QTimer::singleShot(3000, this, [this]() {
             m_micBindBtn->setEnabled(true);
             m_micBindBtn->setText("Bind audio driver");
@@ -1292,22 +1210,61 @@ void MainWindow::setupUI() {
 
     /* Apply + Reset buttons */
     QHBoxLayout *motorBtns = new QHBoxLayout;
-    m_tiltApplyBtn = new QPushButton("Aplicar");
-    m_tiltApplyBtn->setStyleSheet("QPushButton { background: #185fa5; border: none; color: white; }");
-    connect(m_tiltApplyBtn, &QPushButton::clicked, this, &MainWindow::onTiltApply);
+    m_tiltApplyBtn = new QPushButton("Aplicar Tilt");
     motorBtns->addWidget(m_tiltApplyBtn);
 
-    m_tiltResetBtn = new QPushButton("Reset");
-    m_tiltResetBtn->setStyleSheet("QPushButton { border-color: #a32d2d; color: #e88; }");
-    connect(m_tiltResetBtn, &QPushButton::clicked, this, &MainWindow::onTiltReset);
+    m_tiltResetBtn = new QPushButton("Reset 0°");
     motorBtns->addWidget(m_tiltResetBtn);
     motorLayout->addLayout(motorBtns);
 
-    /* Cooldown empty frame */
-    m_tiltCooldownLabel = new QLabel("");
-    m_tiltCooldownLabel->setFixedHeight(32);
-    m_tiltCooldownLabel->setStyleSheet("background: #1a1c20; border: 0.5px solid #33363c; border-radius: 4px; font-size: 11px; color: #f9e2af;");
-    motorLayout->addWidget(m_tiltCooldownLabel);
+    connect(m_tiltApplyBtn, &QPushButton::clicked, this, [this]() {
+        fprintf(stderr, "[BTN] Aplicar clicked\n"); fflush(stderr);
+        int angle = m_tiltSlider->value();
+        m_tiltApplyBtn->setEnabled(false);
+        m_tiltResetBtn->setEnabled(false);
+        m_tiltApplyBtn->setText("Moviendo...");
+        QThread::create([this, angle]() {
+            k4w_status_t resp;
+            bool ok = sendDaemonCmd(K4W_CMD_TILT, angle, &resp);
+            fprintf(stderr, "[BTN] TILT result=%d tilt=%.1f\n", ok, resp.tilt_deg); fflush(stderr);
+            QMetaObject::invokeMethod(this, [this, ok, resp]() {
+                if (ok) {
+                    m_tiltValue->setText(QString("%1°").arg((int)resp.tilt_deg));
+                    m_tiltValueSensor->setText(QString("Ángulo: %1°").arg((int)resp.tilt_deg));
+                    m_kinectUp->setStyleSheet(
+                        QString("background:transparent; transform: rotate(%1deg);").arg(-(int)resp.tilt_deg));
+                    m_tiltSlider->setValue(qBound(-15, (int)resp.tilt_deg, 15));
+                }
+                m_tiltApplyBtn->setEnabled(true);
+                m_tiltApplyBtn->setText("Aplicar Tilt");
+                m_tiltResetBtn->setEnabled(true);
+            });
+        })->start();
+    });
+
+    connect(m_tiltResetBtn, &QPushButton::clicked, this, [this]() {
+        fprintf(stderr, "[BTN] Reset clicked\n"); fflush(stderr);
+        m_tiltApplyBtn->setEnabled(false);
+        m_tiltResetBtn->setEnabled(false);
+        m_tiltResetBtn->setText("Reseteando...");
+        QThread::create([this]() {
+            k4w_status_t resp;
+            bool ok = sendDaemonCmd(K4W_CMD_TILT, 0, &resp);
+            fprintf(stderr, "[BTN] RESET result=%d tilt=%.1f\n", ok, resp.tilt_deg); fflush(stderr);
+            QMetaObject::invokeMethod(this, [this, ok, resp]() {
+                if (ok) {
+                    m_tiltValue->setText(QString("%1°").arg((int)resp.tilt_deg));
+                    m_tiltValueSensor->setText(QString("Ángulo: %1°").arg((int)resp.tilt_deg));
+                    m_kinectUp->setStyleSheet("background:transparent; transform: rotate(0deg);");
+                    m_tiltSlider->setValue(0);
+                }
+                m_tiltApplyBtn->setEnabled(true);
+                m_tiltApplyBtn->setText("Aplicar Tilt");
+                m_tiltResetBtn->setEnabled(true);
+                m_tiltResetBtn->setText("Reset 0°");
+            });
+        })->start();
+    });
 
     motorLayout->addSpacing(4);
 
@@ -1325,23 +1282,30 @@ void MainWindow::setupUI() {
     motorLayout->addWidget(m_tiltValueSensor);
 
     QPushButton *sensorUpdateBtn = new QPushButton("Actualizar sensores");
+    motorLayout->addWidget(sensorUpdateBtn);
     connect(sensorUpdateBtn, &QPushButton::clicked, this, [this, sensorUpdateBtn]() {
-        if (!isConnected()) return;
+        fprintf(stderr, "[BTN] Actualizar sensores clicked\n"); fflush(stderr);
         sensorUpdateBtn->setEnabled(false);
         sensorUpdateBtn->setText("Leyendo...");
-        k4w_status_t resp;
-        bool ok = sendDaemonCmd(K4W_CMD_ACCEL, 0, &resp);
-        if (ok) {
-            m_accelValue->setText(QString("X: %1  Y: %2  Z: %3").arg(resp.accel_x, 0, 'f', 2).arg(resp.accel_y, 0, 'f', 2).arg(resp.accel_z, 0, 'f', 2));
-            m_tiltValueSensor->setText(QString("Ángulo: %1°").arg((int)resp.tilt_deg));
-        } else {
-            m_accelValue->setText("Error");
-            m_tiltValueSensor->setText("Error");
-        }
-        sensorUpdateBtn->setEnabled(true);
-        sensorUpdateBtn->setText("Actualizar sensores");
+        QThread::create([this, sensorUpdateBtn]() {
+            k4w_status_t resp;
+            bool ok = sendDaemonCmd(K4W_CMD_ACCEL, 0, &resp);
+            fprintf(stderr, "[BTN] ACCEL result=%d ax=%.2f ay=%.2f az=%.2f tilt=%.1f\n",
+                    ok, resp.accel_x, resp.accel_y, resp.accel_z, resp.tilt_deg); fflush(stderr);
+            QMetaObject::invokeMethod(this, [this, sensorUpdateBtn, ok, resp]() {
+                if (ok) {
+                    m_accelValue->setText(QString("X: %1  Y: %2  Z: %3")
+                        .arg(resp.accel_x, 0, 'f', 2).arg(resp.accel_y, 0, 'f', 2).arg(resp.accel_z, 0, 'f', 2));
+                    m_tiltValueSensor->setText(QString("Ángulo: %1°").arg((int)resp.tilt_deg));
+                } else {
+                    m_accelValue->setText("Error");
+                    m_tiltValueSensor->setText("Error");
+                }
+                sensorUpdateBtn->setEnabled(true);
+                sensorUpdateBtn->setText("Actualizar sensores");
+            });
+        })->start();
     });
-    motorLayout->addWidget(sensorUpdateBtn);
 
     rightCol->addWidget(motorPanel);
     rightCol->addStretch();

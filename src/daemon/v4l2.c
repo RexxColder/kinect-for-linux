@@ -6,6 +6,8 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <linux/videodev2.h>
+#include <jpeglib.h>
+#include <stdlib.h>
 
 /* Convert RGB24 to YUYV (YUV 4:2:2) for maximum compatibility */
 static void rgb_to_yuyv(const uint8_t *rgb, uint8_t *yuyv, int width, int height) {
@@ -26,6 +28,40 @@ static void rgb_to_yuyv(const uint8_t *rgb, uint8_t *yuyv, int width, int height
     }
 }
 
+/* Convert RGB24 to JPEG — returns bytes written to out_buf */
+static int rgb_to_jpeg(const uint8_t *rgb, int width, int height,
+                       uint8_t *out_buf, int out_size, int quality) {
+    struct jpeg_compress_struct cinfo;
+    struct jpeg_error_mgr jerr;
+    cinfo.err = jpeg_std_error(&jerr);
+    jpeg_create_compress(&cinfo);
+
+    unsigned char *outmem = NULL;
+    unsigned long outmem_size = 0;
+    jpeg_mem_dest(&cinfo, &outmem, &outmem_size);
+
+    cinfo.image_width = width;
+    cinfo.image_height = height;
+    cinfo.input_components = 3;
+    cinfo.in_color_space = JCS_RGB;
+    jpeg_set_defaults(&cinfo);
+    jpeg_set_quality(&cinfo, quality, TRUE);
+    jpeg_start_compress(&cinfo, TRUE);
+
+    while (cinfo.next_scanline < cinfo.image_height) {
+        JSAMPROW row = (JSAMPROW)(rgb + cinfo.next_scanline * width * 3);
+        jpeg_write_scanlines(&cinfo, &row, 1);
+    }
+    jpeg_finish_compress(&cinfo);
+    jpeg_destroy_compress(&cinfo);
+
+    int sz = (int)outmem_size;
+    if (sz < out_size) memcpy(out_buf, outmem, sz);
+    else sz = 0;
+    free(outmem);
+    return sz;
+}
+
 int k4w_v4l2_open(const char *device, int width, int height) {
     int fd = open(device, O_RDWR);
     if (fd < 0) {
@@ -34,29 +70,37 @@ int k4w_v4l2_open(const char *device, int width, int height) {
         return -1;
     }
 
-    /* Try YUYV first (most compatible), fall back to RGB24 */
+    /* Try MJPEG first (Discord/WebRTC compatibility), then YUYV, then RGB24 */
     struct v4l2_format fmt = {0};
     fmt.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
     fmt.fmt.pix.width = width;
     fmt.fmt.pix.height = height;
-    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
-    fmt.fmt.pix.bytesperline = width * 2;
-    fmt.fmt.pix.sizeimage = width * height * 2;
+    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_MJPEG;
+    fmt.fmt.pix.bytesperline = width * 3;
+    fmt.fmt.pix.sizeimage = width * height * 3;
     fmt.fmt.pix.field = V4L2_FIELD_NONE;
 
-    if (ioctl(fd, VIDIOC_S_FMT, &fmt) < 0) {
-        /* Fall back to RGB24 */
-        fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB24;
-        fmt.fmt.pix.bytesperline = width * 3;
-        fmt.fmt.pix.sizeimage = width * height * 3;
-        if (ioctl(fd, VIDIOC_S_FMT, &fmt) < 0) {
-            K4W_LOG("V4L2: cannot set format on %s\n", device);
-            close(fd);
-            return -1;
-        }
-        K4W_LOG("V4L2: opened %s (%dx%d RGB24)\n", device, width, height);
+    if (ioctl(fd, VIDIOC_S_FMT, &fmt) == 0) {
+        K4W_LOG("V4L2: opened %s (%dx%d MJPEG)\n", device, width, height);
     } else {
-        K4W_LOG("V4L2: opened %s (%dx%d YUYV)\n", device, width, height);
+        /* Try YUYV */
+        fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
+        fmt.fmt.pix.bytesperline = width * 2;
+        fmt.fmt.pix.sizeimage = width * height * 2;
+        if (ioctl(fd, VIDIOC_S_FMT, &fmt) == 0) {
+            K4W_LOG("V4L2: opened %s (%dx%d YUYV)\n", device, width, height);
+        } else {
+            /* Fall back to RGB24 */
+            fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB24;
+            fmt.fmt.pix.bytesperline = width * 3;
+            fmt.fmt.pix.sizeimage = width * height * 3;
+            if (ioctl(fd, VIDIOC_S_FMT, &fmt) < 0) {
+                K4W_LOG("V4L2: cannot set format on %s\n", device);
+                close(fd);
+                return -1;
+            }
+            K4W_LOG("V4L2: opened %s (%dx%d RGB24)\n", device, width, height);
+        }
     }
 
     return fd;
@@ -65,18 +109,21 @@ int k4w_v4l2_open(const char *device, int width, int height) {
 int k4w_v4l2_write_frame(int fd, const void *rgb_data, int width, int height) {
     if (fd < 0) return -1;
 
-    /* Query current format */
     struct v4l2_format fmt = {0};
     fmt.type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
     if (ioctl(fd, VIDIOC_G_FMT, &fmt) < 0) return -1;
 
-    if (fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_YUYV) {
-        /* Convert RGB to YUYV */
+    if (fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_MJPEG) {
+        uint8_t jpeg_buf[width * height * 3];
+        int sz = rgb_to_jpeg((const uint8_t *)rgb_data, width, height,
+                             jpeg_buf, sizeof(jpeg_buf), 80);
+        if (sz > 0) return write(fd, jpeg_buf, sz);
+        return -1;
+    } else if (fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_YUYV) {
         uint8_t yuyv[width * height * 2];
         rgb_to_yuyv((const uint8_t *)rgb_data, yuyv, width, height);
         return write(fd, yuyv, width * height * 2);
     } else {
-        /* Direct RGB write */
         return write(fd, rgb_data, width * height * 3);
     }
 }

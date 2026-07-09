@@ -200,8 +200,8 @@ int k4w_motor_set_tilt(freenect_device *dev, double angle) {
     if (at >= 32) {
         int32_t tilt_raw;
         memcpy(&tilt_raw, abuf + 28, 4);
-        g_current_tilt = (double)tilt_raw;
-        K4W_LOG("Motor: final tilt %.0f° (target %.0f°)\n", g_current_tilt, g_target_tilt);
+        g_current_tilt = (double)tilt_raw / 2.0;
+        K4W_LOG("Motor: final tilt %.1f° (target %.1f°)\n", g_current_tilt, g_target_tilt);
     }
     /* Trailing reply */
     unsigned char rbuf[512] = {0};
@@ -242,7 +242,7 @@ int k4w_motor_get_tilt(freenect_device *dev, double *angle) {
     if (transferred >= 32) {
         int32_t tilt_raw;
         memcpy(&tilt_raw, buf + 28, 4);
-        *angle = (double)tilt_raw;
+        *angle = (double)tilt_raw / 2.0;
         g_current_tilt = *angle;
     } else {
         *angle = g_current_tilt;

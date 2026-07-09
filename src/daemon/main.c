@@ -108,6 +108,9 @@ int main(int argc, char **argv) {
     /* Set state for kinect module (needed for motor pause/resume) */
     k4w_kinect_set_state(&g_state);
 
+    /* Initialize PipeWire video source for camera detection */
+    k4w_pw_source_init(cfg.v4l2_width, cfg.v4l2_height, 30);
+
     /* Start audio thread if enabled */
     if (cfg.enable_audio) {
         k4w_kinect_start_audio(&g_state);
@@ -129,6 +132,7 @@ int main(int argc, char **argv) {
     k4w_kinect_run(&g_state);
 
     g_running = 0;
+    k4w_pw_source_stop();
     k4w_kinect_stop(&g_state);
 
     if (sock_ok) {

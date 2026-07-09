@@ -1,0 +1,2 @@
+# Force v4l2loopback KinectCam device to report as video capture for portal detection
+SUBSYSTEM=="video4linux", ATTR{name}=="KinectCam", ENV{ID_V4L_CAPABILITIES}=":video_capture:"

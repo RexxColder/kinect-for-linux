@@ -48,6 +48,7 @@ set(DAEMON_SOURCES
     src/daemon/audio.c
     src/daemon/socket.c
     src/daemon/config.c
+    src/daemon/pw_source.c
 )
 
 add_executable(k4wd ${DAEMON_SOURCES})
@@ -61,6 +62,7 @@ target_link_libraries(k4wd PRIVATE
     freenect_sync
     ${LIBUSB_LIBRARIES}
     ${ALSA_LIBRARIES}
+    jpeg
     Threads::Threads
     rt
     m
@@ -80,6 +82,13 @@ if(V4L2_FOUND)
     target_include_directories(k4wd PRIVATE ${V4L2_INCLUDE_DIRS})
     target_link_libraries(k4wd PRIVATE ${V4L2_LIBRARIES})
     target_compile_definitions(k4wd PRIVATE HAVE_V4L2)
+endif()
+
+pkg_check_modules(PIPEWIRE libpipewire-0.3)
+if(PIPEWIRE_FOUND)
+    target_include_directories(k4wd PRIVATE ${PIPEWIRE_INCLUDE_DIRS})
+    target_link_libraries(k4wd PRIVATE ${PIPEWIRE_LIBRARIES})
+    target_compile_definitions(k4wd PRIVATE HAVE_PIPEWIRE)
 endif()
 
 # ─── Control App (kinect-for-linux) ──────────────────
@@ -142,7 +151,11 @@ if(HAVE_OPENNI2)
     install(TARGETS K4WDriver DESTINATION lib/OpenNI2/Drivers)
 endif()
 install(FILES 90-kinect.rules DESTINATION /etc/udev/rules.d)
+install(FILES 51-kinect.rules DESTINATION /etc/udev/rules.d)
+install(FILES 99-kinect-camera.rules DESTINATION /etc/udev/rules.d)
 install(FILES v4l2loopback.conf DESTINATION /etc/modprobe.d)
+install(FILES wireplumber/51-kinect-audio.conf DESTINATION /etc/wireplumber/wireplumber.conf.d)
+install(FILES k4wd.service DESTINATION /home/rexx/.config/systemd/user)
 
 # ─── Status ─────────────────────────────────────────
 message(STATUS "")
@@ -153,4 +166,5 @@ message(STATUS "  Skeleton Tracking:       ${HAVE_OPENCV}")
 message(STATUS "  OpenNI2 Driver:          ${HAVE_OPENNI2}")
 message(STATUS "  PulseAudio:              ${PULSEAUDIO_FOUND}")
 message(STATUS "  V4L2 Loopback:           ${V4L2_FOUND}")
+message(STATUS "  PipeWire Source:         ${PIPEWIRE_FOUND}")
 message(STATUS "")

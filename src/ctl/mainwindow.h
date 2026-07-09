@@ -16,7 +16,6 @@
 #include <QDir>
 #include <QThread>
 #include <QMutex>
-#include <QProcess>
 #include "tracker.h"
 
 /* ─── Microphone Monitor Thread ─────────────────────────── */
@@ -72,13 +71,9 @@ private slots:
     void onRefreshFrame();
     void onReconnectTick();
     void onModeChanged(int index);
-    void onMotorTilt(int angle);
     void onCapturePhoto();
     void onRecordToggle();
     void onTrayActivated(QSystemTrayIcon::ActivationReason reason);
-    void onTiltDebounce();
-    void onTiltApply();
-    void onTiltReset();
     void onStartDaemon();
     void onResetDaemon();
     void onShutdownDaemon();
@@ -105,7 +100,6 @@ private:
     QLabel *m_tiltValue;
     QPushButton *m_tiltApplyBtn;
     QPushButton *m_tiltResetBtn;
-    QLabel *m_tiltCooldownLabel;
     QLabel *m_kinectUp;
     QLabel *m_kinectDown;
     QTableWidget *m_sensorTable;
@@ -129,25 +123,21 @@ private:
     QLabel *m_motorStatusDot;
     QLabel *m_audioStatusDot;
 
-    /* Motor debounce + cooldown */
-    QTimer *m_tiltDebounce;
-    QTimer *m_tiltCooldown;
-    QTimer *m_tiltCountdownTimer;
+    /* Motor */
     bool m_tiltBusy;
-    int m_tiltTarget;
-    int m_tiltCountdownSec;
 
-    /* Skeleton frame skip */
-    int m_skeletonFrameSkip;
-    int m_skeletonFrameCounter;
+    /* Skeleton Tracker */
+    SkeletonTracker *m_tracker;
+
+    /* Root password for session */
+    QString m_rootPassword;
+    bool promptRootPassword();
+    void sudoExec(const QStringList &args);
+    void sudoStartDetached(const QString &program, const QStringList &args);
 
     /* System Tray */
     QSystemTrayIcon *m_trayIcon;
     QMenu *m_trayMenu;
-
-    /* Skeleton Tracker */
-    SkeletonTracker *m_tracker;
-    QProcess *m_skeletonProcess;
 
     /* State */
     QTimer *m_frameTimer;

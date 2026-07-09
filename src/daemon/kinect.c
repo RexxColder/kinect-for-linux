@@ -33,6 +33,8 @@ static void video_cb(freenect_device *dev, void *data, uint32_t timestamp) {
         k4w_v4l2_write_frame(g_state->v4l2_fd, data,
                              K4W_VIDEO_W, K4W_VIDEO_H);
     }
+
+    k4w_pw_source_push_frame(data, K4W_VIDEO_W, K4W_VIDEO_H);
 }
 
 static void audio_cb(freenect_device *dev, int num_samples,
@@ -413,12 +415,21 @@ int k4w_kinect_run(k4w_state_t *state) {
     int iter = 0;
     int consecutive_errors = 0;
     bool device_ok = true;
+    bool was_motor_paused = false;
 
     while (state->running) {
         /* Skip sync polling while motor commands are in progress */
         if (state->motor_paused) {
+            was_motor_paused = true;
             usleep(100000);
             continue;
+        }
+        /* After motor resumes, let freenect_sync re-initialize */
+        if (was_motor_paused) {
+            was_motor_paused = false;
+            consecutive_errors = 0;
+            K4W_LOG("Motor resumed, waiting for sync re-init...\n");
+            usleep(2000000); /* 2s for USB + freenect_sync to stabilize */
         }
         /* Poll depth */
         void *depth_data = NULL;
@@ -459,6 +470,25 @@ int k4w_kinect_run(k4w_state_t *state) {
             if (video_data && state->v4l2_fd >= 0) {
                 k4w_v4l2_write_frame(state->v4l2_fd, video_data,
                     K4W_VIDEO_W, K4W_VIDEO_H);
+            }
+            if (video_data) {
+                k4w_pw_source_push_frame(video_data, K4W_VIDEO_W, K4W_VIDEO_H);
+            }
+
+            /* After first frame written, restart WirePlumber for camera detection */
+            static int wp_restarted = 0;
+            if (!wp_restarted && video_data && state->v4l2_fd >= 0) {
+                wp_restarted = 1;
+                K4W_LOG("Restarting WirePlumber after first frame...\n");
+                const char *xdg = getenv("XDG_RUNTIME_DIR");
+                char cmd[256];
+                if (xdg)
+                    snprintf(cmd, sizeof(cmd),
+                        "XDG_RUNTIME_DIR=%s systemctl --user restart wireplumber 2>/dev/null", xdg);
+                else
+                    snprintf(cmd, sizeof(cmd),
+                        "systemctl --user restart wireplumber 2>/dev/null");
+                system(cmd);
             }
         }
 

@@ -70,13 +70,15 @@ install_deps() {
             sudo pacman -Sy --noconfirm --needed \
                 cmake gcc make pkg-config \
                 libusb alsa-lib qt6-base qt6-tools \
-                python python-numpy opencv msitools
+                python python-numpy opencv msitools \
+                pipewire libjpeg-turbo
             # AUR packages (libfreenect, v4l2loopback-dkms, openni2)
             # pulseaudio-libs is NOT needed when pipewire-pulse is installed
             local AUR_PKGS=()
             pacman -Qi libfreenect &>/dev/null || AUR_PKGS+=(libfreenect)
             pacman -Qi v4l2loopback-dkms &>/dev/null || AUR_PKGS+=(v4l2loopback-dkms)
             pacman -Qi openni2 &>/dev/null || AUR_PKGS+=(openni2)
+            pacman -Qi arrpc &>/dev/null || AUR_PKGS+=(arrpc)
             if [ ${#AUR_PKGS[@]} -gt 0 ]; then
                 aur_install "${AUR_PKGS[@]}"
             else
@@ -241,17 +243,21 @@ install_app() {
         sudo install -Dm755 "$SCRIPT_DIR/kinect-for-linux" /usr/local/bin/kinect-for-linux
         sudo install -Dm644 "$SCRIPT_DIR/kinect-for-linux.png" /usr/share/pixmaps/kinect-for-linux.png
         sudo install -Dm644 "$SCRIPT_DIR/kinect-for-linux.desktop" /usr/share/applications/kinect-for-linux.desktop
-        sudo install -Dm755 "$SCRIPT_DIR/skeleton_tracker.py" /usr/local/bin/skeleton_tracker.py
-        sudo ldconfig
     fi
 
     # udev rules
     sudo cp "$SCRIPT_DIR/90-kinect.rules" /etc/udev/rules.d/
+    sudo cp "$SCRIPT_DIR/51-kinect.rules" /etc/udev/rules.d/
+    sudo cp "$SCRIPT_DIR/99-kinect-camera.rules" /etc/udev/rules.d/
     sudo udevadm control --reload-rules
     sudo udevadm trigger
 
     # v4l2loopback config
     sudo cp "$SCRIPT_DIR/v4l2loopback.conf" /etc/modprobe.d/
+
+    # WirePlumber config — disable Kinect USB audio for exclusive access
+    sudo mkdir -p /etc/wireplumber/wireplumber.conf.d
+    sudo cp "$SCRIPT_DIR/wireplumber/51-kinect-audio.conf" /etc/wireplumber/wireplumber.conf.d/
 
     # Blacklist gspca_kinect (conflicts with libfreenect USB access)
     if [ ! -f /etc/modprobe.d/blacklist-gspca-kinect.conf ]; then
@@ -261,20 +267,46 @@ install_app() {
         log "Blacklisted gspca_kinect module"
     fi
 
-    # Python venv for skeleton tracker
-    info "Setting up Python environment for skeleton tracker..."
-    python3 -m venv /tmp/mediapipe-venv 2>/dev/null || true
-    /tmp/mediapipe-venv/bin/pip install mediapipe numpy opencv-python 2>/dev/null || true
-
     # Load v4l2loopback
     sudo modprobe v4l2loopback devices=1 video_nr=100 exclusive_caps=1 card_label="Kinect" 2>/dev/null || true
 
-    # Install skeleton tracker models
-    if [ -d "$SCRIPT_DIR/models" ]; then
-        sudo mkdir -p /usr/local/share/k4w-models
-        sudo cp "$SCRIPT_DIR/models"/*.task /usr/local/share/k4w-models/ 2>/dev/null || true
-        log "Models installed to /usr/local/share/k4w-models/"
+    # Install systemd user service
+    mkdir -p "$HOME/.config/systemd/user"
+    cp "$SCRIPT_DIR/k4wd.service" "$HOME/.config/systemd/user/"
+    systemctl --user daemon-reload 2>/dev/null || true
+    systemctl --user enable k4wd.service 2>/dev/null || true
+    log "Systemd service installed (k4wd.service)"
+
+    # Enable arrpc for Discord Rich Presence (if installed)
+    if systemctl --user list-unit-files arrpc.service &>/dev/null; then
+        systemctl --user enable arrpc.service 2>/dev/null || true
+        log "Discord RPC service enabled (arrpc.service)"
     fi
+
+    # Install ONNX models for C++ skeleton tracking
+    sudo mkdir -p /usr/local/share/k4w-models
+    local MODEL_DIR="/usr/local/share/k4w-models"
+    local DETECT_MODEL="person_detection_mediapipe_2023mar.onnx"
+    local POSE_MODEL="pose_estimation_mediapipe_2023mar_onnx.onnx"
+    local BASE_URL="https://github.com/opencv/opencv_zoo/raw/main/models/pose_estimation_mediapipe"
+
+    if [ ! -f "$MODEL_DIR/$DETECT_MODEL" ]; then
+        info "Downloading person detection model..."
+        sudo wget -q -O "$MODEL_DIR/$DETECT_MODEL" \
+            "$BASE_URL/$DETECT_MODEL" 2>/dev/null || warn "Download failed: $DETECT_MODEL"
+    else
+        log "Detection model already installed"
+    fi
+
+    if [ ! -f "$MODEL_DIR/$POSE_MODEL" ]; then
+        info "Downloading pose estimation model..."
+        sudo wget -q -O "$MODEL_DIR/$POSE_MODEL" \
+            "$BASE_URL/$POSE_MODEL" 2>/dev/null || warn "Download failed: $POSE_MODEL"
+    else
+        log "Pose model already installed"
+    fi
+
+    log "Models directory: $MODEL_DIR"
 
     # Setup OpenNI2 driver (symlink libFreenectDriver to OpenNI2 drivers dir)
     if [ -d /usr/lib/OpenNI2-FreenectDriver ] && [ -d /usr/lib/OpenNI2/Drivers ]; then
@@ -288,12 +320,13 @@ install_app() {
     echo -e "${GREEN} Kinect for Linux installed successfully!${NC}"
     echo -e "${GREEN}═══════════════════════════════════════════════════${NC}"
     echo ""
-    echo "  Run daemon:     sudo k4wd"
+    echo "  Daemon:         systemctl --user start k4wd"
+    echo "  Daemon status:  systemctl --user status k4wd"
+    echo "  Daemon logs:    journalctl --user -u k4wd -f"
     echo "  Run GUI:        kinect-for-linux"
     echo "  Audio sink:     'k4w-mic' (Monitor of k4w-mic)"
-    echo "  OpenNI2 apps:   Set LD_LIBRARY_PATH=/usr/local/lib"
-    echo ""
-    echo "  Processing:     Copy libK4WDriver.so to SimpleOpenNI OpenNI2/Drivers/"
+    echo "  Discord RPC:    systemctl --user start arrpc"
+    echo "  Camera:         Restart Discord after daemon starts"
     echo ""
 }
 

@@ -1,0 +1,17 @@
+[Unit]
+Description=Kinect for Linux Daemon
+After=graphical-session.target pipewire.service wireplumber.service
+Wants=wireplumber.service
+
+[Service]
+Type=simple
+ExecStartPre=/bin/rm -f /tmp/k4w.pid
+ExecStart=/usr/local/bin/k4wd
+Restart=on-failure
+RestartSec=3
+Environment=HOME=%h
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=PULSE_SERVER=unix:/run/user/%U/pulse/native
+
+[Install]
+WantedBy=default.target

@@ -35,6 +35,11 @@ int  k4w_motor_get_accel(freenect_device *dev, double *x, double *y, double *z);
 int  k4w_motor_is_busy(void);
 double k4w_motor_get_current_tilt(void);
 
+/* ─── PipeWire Source ─────────────────────────────── */
+int  k4w_pw_source_init(int width, int height, int fps);
+int  k4w_pw_source_push_frame(const uint8_t *rgb, int width, int height);
+void k4w_pw_source_stop(void);
+
 /* ─── Socket Server ───────────────────────────────── */
 int  k4w_socket_init(void);
 int  k4w_socket_accept(int server_fd);
