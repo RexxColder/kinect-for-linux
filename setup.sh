@@ -70,12 +70,13 @@ install_deps() {
             sudo pacman -Sy --noconfirm --needed \
                 cmake gcc make pkg-config \
                 libusb alsa-lib qt6-base qt6-tools \
-                python python-numpy opencv
-            # AUR packages (libfreenect, v4l2loopback-dkms)
+                python python-numpy opencv msitools
+            # AUR packages (libfreenect, v4l2loopback-dkms, openni2)
             # pulseaudio-libs is NOT needed when pipewire-pulse is installed
             local AUR_PKGS=()
             pacman -Qi libfreenect &>/dev/null || AUR_PKGS+=(libfreenect)
             pacman -Qi v4l2loopback-dkms &>/dev/null || AUR_PKGS+=(v4l2loopback-dkms)
+            pacman -Qi openni2 &>/dev/null || AUR_PKGS+=(openni2)
             if [ ${#AUR_PKGS[@]} -gt 0 ]; then
                 aur_install "${AUR_PKGS[@]}"
             else
@@ -87,6 +88,7 @@ install_deps() {
             sudo apt install -y \
                 build-essential cmake pkg-config \
                 libfreenect-dev libusb-1.0-0-dev libasound2-dev libpulse-dev \
+                libopenni2-dev \
                 qt6-base-dev qt6-tools-dev libopencv-dev \
                 python3 python3-numpy python3-opencv
             ;;
@@ -94,6 +96,7 @@ install_deps() {
             sudo dnf install -y \
                 cmake gcc make pkg-config \
                 libusb1-devel alsa-lib-devel pulseaudio-libs-devel \
+                openni2-devel \
                 qt6-qtbase-devel qt6-qtdeclarative-devel \
                 python3 python3-numpy opencv-devel
             ;;
@@ -216,8 +219,7 @@ build() {
         mkdir -p "$BUILD_DIR"
         cd "$BUILD_DIR"
         cmake "$SCRIPT_DIR" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DOPENNI2_DIR=/home/rexx/Proyectos/OpenNI2
+            -DCMAKE_BUILD_TYPE=Release
         make -j$(nproc)
         log "Build complete"
     else
@@ -239,7 +241,7 @@ install_app() {
         sudo install -Dm755 "$SCRIPT_DIR/kinect-for-linux" /usr/local/bin/kinect-for-linux
         sudo install -Dm644 "$SCRIPT_DIR/kinect-for-linux.png" /usr/share/pixmaps/kinect-for-linux.png
         sudo install -Dm644 "$SCRIPT_DIR/kinect-for-linux.desktop" /usr/share/applications/kinect-for-linux.desktop
-        sudo install -Dm755 "$SCRIPT_DIR/skeleton_tracker.py" /usr/local/bin/skeleton_tracker
+        sudo install -Dm755 "$SCRIPT_DIR/skeleton_tracker.py" /usr/local/bin/skeleton_tracker.py
         sudo ldconfig
     fi
 
@@ -266,6 +268,13 @@ install_app() {
 
     # Load v4l2loopback
     sudo modprobe v4l2loopback devices=1 video_nr=100 exclusive_caps=1 card_label="Kinect" 2>/dev/null || true
+
+    # Install skeleton tracker models
+    if [ -d "$SCRIPT_DIR/models" ]; then
+        sudo mkdir -p /usr/local/share/k4w-models
+        sudo cp "$SCRIPT_DIR/models"/*.task /usr/local/share/k4w-models/ 2>/dev/null || true
+        log "Models installed to /usr/local/share/k4w-models/"
+    fi
 
     log "Installation complete!"
     echo ""
