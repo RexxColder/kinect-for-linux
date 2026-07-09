@@ -296,6 +296,19 @@ MainWindow::MainWindow(QWidget *parent)
             m_startDaemonBtn->setStyleSheet(
                 "QPushButton { background:#a6e3a1; color:#1e1e2e; border:1px solid #40a02b; "
                 "border-radius:6px; padding:6px 14px; font-size:11px; font-weight:bold; }");
+            /* Re-enable reset button when daemon comes online */
+            m_resetDaemonBtn->setEnabled(true);
+            m_resetDaemonBtn->setText("Reset daemon");
+            m_resetDaemonBtn->setStyleSheet(
+                "QPushButton { border-color: #a32d2d; color: #e88; }"
+                "QPushButton:hover { background: rgba(163,45,45,0.2); }");
+            /* Re-enable motor buttons */
+            m_tiltBusy = false;
+            m_tiltApplyBtn->setEnabled(true);
+            m_tiltApplyBtn->setText("Aplicar");
+            m_tiltResetBtn->setEnabled(true);
+            m_tiltResetBtn->setText("Reset 0°");
+            m_tiltSlider->setEnabled(true);
         } else if (!online && m_daemonOnline) {
             fprintf(stderr, "[App] Daemon went OFFLINE\n");
             m_daemonOnline = false;
@@ -701,11 +714,13 @@ void MainWindow::onTiltDebounce() {
 static bool sendDaemonCmd(int cmd_type, int cmd_arg, k4w_status_t *resp) {
     QLocalSocket sock;
     sock.connectToServer("/tmp/k4w.sock");
-    if (!sock.waitForConnected(1000)) return false;
+    if (!sock.waitForConnected(2000)) return false;
     int cmd[2] = { cmd_type, cmd_arg };
     sock.write((const char *)cmd, sizeof(cmd));
-    if (!sock.waitForBytesWritten(500)) { sock.disconnectFromServer(); return false; }
-    if (!sock.waitForReadyRead(8000)) { sock.disconnectFromServer(); return false; }
+    if (!sock.waitForBytesWritten(1000)) { sock.disconnectFromServer(); return false; }
+    /* Motor commands take ~8s (reset + move + settle), use 20s timeout */
+    int timeout = (cmd_type == K4W_CMD_TILT) ? 20000 : 5000;
+    if (!sock.waitForReadyRead(timeout)) { sock.disconnectFromServer(); return false; }
     char buf[256] = {0};
     qint64 n = sock.read(buf, sizeof(buf));
     sock.disconnectFromServer();
@@ -728,27 +743,36 @@ void MainWindow::onTiltApply() {
     m_tiltSlider->setEnabled(false);
 
     int angle = qBound(-15, m_tiltSlider->value(), 15);
-    k4w_status_t resp;
-    if (sendDaemonCmd(K4W_CMD_TILT, angle, &resp)) {
-        m_tiltValue->setText(QString("%1°").arg((int)resp.tilt_deg));
-        m_tiltValueSensor->setText(QString("%1°").arg((int)resp.tilt_deg));
-        m_accelValue->setText(QString("X:%1 Y:%2 Z:%3").arg(resp.accel_x, 0, 'f', 2).arg(resp.accel_y, 0, 'f', 2).arg(resp.accel_z, 0, 'f', 2));
-        int actual = qBound(-31, (int)resp.tilt_deg, 31);
-        m_kinectUp->setStyleSheet(
-            QString("background:transparent; transform: rotate(%1deg);").arg(-actual));
-        m_tiltSlider->setValue(actual);
-    }
 
-    m_tiltSlider->setEnabled(true);
-    m_tiltApplyBtn->setEnabled(true);
-    m_tiltApplyBtn->setText("Aplicar");
-    m_tiltResetBtn->setEnabled(true);
-    m_tiltBusy = false;
-    updateStatusDots();
-    m_tiltCooldown->start();
-    m_tiltCountdownSec = 2;
-    m_tiltCooldownLabel->setText("Cooldown: 2s");
-    m_tiltCountdownTimer->start();
+    /* Run motor command in background thread to avoid blocking GUI */
+    QThread *thread = QThread::create([this, angle]() {
+        k4w_status_t resp;
+        bool ok = sendDaemonCmd(K4W_CMD_TILT, angle, &resp);
+        /* Update UI on main thread */
+        QMetaObject::invokeMethod(this, [this, ok, resp]() {
+            if (ok) {
+                m_tiltValue->setText(QString("%1°").arg((int)resp.tilt_deg));
+                m_tiltValueSensor->setText(QString("%1°").arg((int)resp.tilt_deg));
+                m_accelValue->setText(QString("X:%1 Y:%2 Z:%3").arg(resp.accel_x, 0, 'f', 2).arg(resp.accel_y, 0, 'f', 2).arg(resp.accel_z, 0, 'f', 2));
+                int actual = qBound(-31, (int)resp.tilt_deg, 31);
+                m_kinectUp->setStyleSheet(
+                    QString("background:transparent; transform: rotate(%1deg);").arg(-actual));
+                m_tiltSlider->setValue(actual);
+            }
+            m_tiltSlider->setEnabled(true);
+            m_tiltApplyBtn->setEnabled(true);
+            m_tiltApplyBtn->setText("Aplicar");
+            m_tiltResetBtn->setEnabled(true);
+            m_tiltBusy = false;
+            updateStatusDots();
+            m_tiltCooldown->start();
+            m_tiltCountdownSec = 2;
+            m_tiltCooldownLabel->setText("Cooldown: 2s");
+            m_tiltCountdownTimer->start();
+        });
+    });
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+    thread->start();
 }
 
 void MainWindow::onTiltReset() {
@@ -762,15 +786,34 @@ void MainWindow::onTiltReset() {
     m_tiltResetBtn->setText("Reseteando...");
     m_tiltSlider->setEnabled(false);
 
-    k4w_status_t resp;
-    if (sendDaemonCmd(K4W_CMD_TILT, 0, &resp)) {
-        m_tiltValue->setText(QString("%1°").arg((int)resp.tilt_deg));
-        m_tiltValueSensor->setText(QString("%1°").arg((int)resp.tilt_deg));
-        m_accelValue->setText(QString("X:%1 Y:%2 Z:%3").arg(resp.accel_x, 0, 'f', 2).arg(resp.accel_y, 0, 'f', 2).arg(resp.accel_z, 0, 'f', 2));
-        m_kinectUp->setStyleSheet(
-            QString("background:transparent; transform: rotate(0deg);"));
-        m_tiltSlider->setValue(0);
-    }
+    /* Run motor command in background thread */
+    QThread *thread = QThread::create([this]() {
+        k4w_status_t resp;
+        bool ok = sendDaemonCmd(K4W_CMD_TILT, 0, &resp);
+        QMetaObject::invokeMethod(this, [this, ok, resp]() {
+            if (ok) {
+                m_tiltValue->setText(QString("%1°").arg((int)resp.tilt_deg));
+                m_tiltValueSensor->setText(QString("%1°").arg((int)resp.tilt_deg));
+                m_accelValue->setText(QString("X:%1 Y:%2 Z:%3").arg(resp.accel_x, 0, 'f', 2).arg(resp.accel_y, 0, 'f', 2).arg(resp.accel_z, 0, 'f', 2));
+                m_kinectUp->setStyleSheet(
+                    QString("background:transparent; transform: rotate(0deg);"));
+                m_tiltSlider->setValue(0);
+            }
+            m_tiltSlider->setEnabled(true);
+            m_tiltApplyBtn->setEnabled(true);
+            m_tiltApplyBtn->setText("Aplicar");
+            m_tiltResetBtn->setEnabled(true);
+            m_tiltResetBtn->setText("Reset 0°");
+            m_tiltBusy = false;
+            updateStatusDots();
+            m_tiltCooldown->start();
+            m_tiltCountdownSec = 2;
+            m_tiltCooldownLabel->setText("Cooldown: 2s");
+            m_tiltCountdownTimer->start();
+        });
+    });
+    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+    thread->start();
 
     m_tiltSlider->setEnabled(true);
     m_tiltApplyBtn->setEnabled(true);
