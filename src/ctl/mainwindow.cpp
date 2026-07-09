@@ -14,6 +14,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <signal.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <cstring>
 #include <cmath>
 #include <pulse/simple.h>
@@ -784,18 +786,39 @@ void MainWindow::onTiltDebounce() {
 }
 
 static bool sendDaemonCmd(int cmd_type, int cmd_arg, k4w_status_t *resp) {
-    QLocalSocket sock;
-    sock.connectToServer("/tmp/k4w.sock");
-    if (!sock.waitForConnected(2000)) return false;
+    /* Use raw POSIX sockets — works from any thread without event loop */
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return false;
+
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, "/tmp/k4w.sock", sizeof(addr.sun_path) - 1);
+
+    /* Non-blocking connect with timeout */
+    struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        close(fd);
+        return false;
+    }
+
+    /* Send command */
     int cmd[2] = { cmd_type, cmd_arg };
-    sock.write((const char *)cmd, sizeof(cmd));
-    if (!sock.waitForBytesWritten(1000)) { sock.disconnectFromServer(); return false; }
-    /* Motor commands take ~8s (reset + move + settle), use 20s timeout */
-    int timeout = (cmd_type == K4W_CMD_TILT) ? 20000 : 5000;
-    if (!sock.waitForReadyRead(timeout)) { sock.disconnectFromServer(); return false; }
+    if (write(fd, cmd, sizeof(cmd)) != sizeof(cmd)) {
+        close(fd);
+        return false;
+    }
+
+    /* Motor commands take ~8s, use 20s read timeout */
+    int read_timeout = (cmd_type == 0) ? 20 : 5;  /* K4W_CMD_TILT = 0 */
+    struct timeval rtv = { .tv_sec = read_timeout, .tv_usec = 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rtv, sizeof(rtv));
+
     char buf[256] = {0};
-    qint64 n = sock.read(buf, sizeof(buf));
-    sock.disconnectFromServer();
+    ssize_t n = read(fd, buf, sizeof(buf));
+    close(fd);
+
     if (n >= (int)sizeof(k4w_status_t)) {
         memcpy(resp, buf, sizeof(k4w_status_t));
         return true;
