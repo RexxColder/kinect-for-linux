@@ -81,6 +81,7 @@ private slots:
     void onTiltReset();
     void onStartDaemon();
     void onResetDaemon();
+    void onShutdownDaemon();
     void onStatusBarClicked();
 
 private:
@@ -115,6 +116,7 @@ private:
     QLabel *m_statusBar;
     QPushButton *m_startDaemonBtn;
     QPushButton *m_resetDaemonBtn;
+    QPushButton *m_shutdownDaemonBtn;
 
     /* Sensor values */
     QLabel *m_accelValue;

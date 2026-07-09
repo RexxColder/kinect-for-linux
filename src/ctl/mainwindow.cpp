@@ -309,6 +309,9 @@ MainWindow::MainWindow(QWidget *parent)
             m_tiltResetBtn->setEnabled(true);
             m_tiltResetBtn->setText("Reset 0°");
             m_tiltSlider->setEnabled(true);
+            /* Enable shutdown button */
+            m_shutdownDaemonBtn->setEnabled(true);
+            m_shutdownDaemonBtn->setText("Shutdown");
         } else if (!online && m_daemonOnline) {
             fprintf(stderr, "[App] Daemon went OFFLINE\n");
             m_daemonOnline = false;
@@ -326,6 +329,12 @@ MainWindow::MainWindow(QWidget *parent)
                 "QPushButton:pressed { background:#74c76a; }");
             m_accelValue->setText("—");
             m_tiltValueSensor->setText("—");
+            /* Disable shutdown and motor buttons when offline */
+            m_shutdownDaemonBtn->setEnabled(false);
+            m_shutdownDaemonBtn->setText("Shutdown");
+            m_tiltApplyBtn->setEnabled(false);
+            m_tiltResetBtn->setEnabled(false);
+            m_tiltSlider->setEnabled(false);
         }
     });
 
@@ -573,7 +582,70 @@ void MainWindow::onResetDaemon() {
         "QPushButton { background:#f9e2af; color:#1e1e2e; border:1px solid #df8e1d; "
         "border-radius:6px; padding:6px 14px; font-size:11px; font-weight:bold; }");
 
+    /* Safety: re-enable reset button after 15s if daemon doesn't come online */
+    QTimer::singleShot(15000, this, [this]() {
+        if (!m_daemonOnline) {
+            m_resetDaemonBtn->setEnabled(true);
+            m_resetDaemonBtn->setText("Reset daemon");
+            m_resetDaemonBtn->setStyleSheet(
+                "QPushButton { border-color: #a32d2d; color: #e88; }"
+                "QPushButton:hover { background: rgba(163,45,45,0.2); }");
+            m_statusBar->setText("  Daemon no respondió — intentar de nuevo");
+            m_statusBar->setStyleSheet("background:#1e1e2e; border:1px solid #f9e2af; border-radius:4px; padding:5px; font-size:11px; color:#f9e2af;");
+        }
+    });
+
     m_reconnectTimer->start(500);
+}
+
+void MainWindow::onShutdownDaemon() {
+    m_shutdownDaemonBtn->setEnabled(false);
+    m_shutdownDaemonBtn->setText("Deteniendo...");
+
+    /* Kill daemon */
+    QFile pidFile("/tmp/k4w.pid");
+    if (pidFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QByteArray pidLine = pidFile.readLine().trimmed();
+        pidFile.close();
+        if (!pidLine.isEmpty()) {
+            pid_t pid = pidLine.toInt();
+            if (pid > 0) {
+                kill(pid, SIGTERM);
+                for (int i = 0; i < 20 && kill(pid, 0) == 0; i++) usleep(100000);
+                if (kill(pid, 0) == 0) kill(pid, SIGKILL);
+            }
+        }
+    }
+
+    /* Clean everything */
+    QFile::remove("/tmp/k4w.pid");
+    QFile::remove("/tmp/k4w.sock");
+    QFile::remove("/dev/shm/k4w_video");
+    QFile::remove("/dev/shm/k4w_depth");
+    QFile::remove("/dev/shm/k4w_audio");
+    QFile::remove("/dev/shm/k4w_skeleton");
+
+    /* Update UI — daemon is dead */
+    m_daemonOnline = false;
+    m_statusText->setText("Daemon Detenido");
+    m_statusText->setStyleSheet("color:#f38ba8; font-size:11px; font-weight:bold;");
+    m_statusDot->setStyleSheet("background:#f38ba8; border:2px solid #e64553; border-radius:7px;");
+    m_statusBar->setText("  Daemon Detenido");
+    m_statusBar->setStyleSheet("background:#1e1e2e; border:1px solid #f38ba8; border-radius:4px; padding:5px; font-size:11px; color:#f38ba8;");
+
+    /* Re-enable start button, disable shutdown */
+    m_startDaemonBtn->setEnabled(true);
+    m_startDaemonBtn->setText("Conectar a Daemon");
+    m_startDaemonBtn->setStyleSheet(
+        "QPushButton { background:#a6e3a1; color:#1e1e2e; border:1px solid #40a02b; "
+        "border-radius:6px; padding:6px 14px; font-size:11px; font-weight:bold; }"
+        "QPushButton:hover { background:#94d67a; }");
+    m_resetDaemonBtn->setEnabled(false);
+    m_shutdownDaemonBtn->setEnabled(false);
+    m_shutdownDaemonBtn->setText("Shutdown");
+    m_tiltApplyBtn->setEnabled(false);
+    m_tiltResetBtn->setEnabled(false);
+    m_tiltSlider->setEnabled(false);
 }
 
 /* ─── Frame Reading ───────────────────────────────────── */
@@ -942,6 +1014,14 @@ void MainWindow::setupUI() {
         "QPushButton:hover { background: rgba(163,45,45,0.2); }");
     connect(m_resetDaemonBtn, &QPushButton::clicked, this, &MainWindow::onResetDaemon);
     topbar->addWidget(m_resetDaemonBtn);
+
+    m_shutdownDaemonBtn = new QPushButton("Shutdown");
+    m_shutdownDaemonBtn->setStyleSheet(
+        "QPushButton { background: #a32d2d; border: none; color: white; border-radius: 6px; padding: 6px 14px; font-size: 11px; font-weight: bold; }"
+        "QPushButton:hover { background: #c44; }"
+        "QPushButton:disabled { background: #555; color: #888; }");
+    connect(m_shutdownDaemonBtn, &QPushButton::clicked, this, &MainWindow::onShutdownDaemon);
+    topbar->addWidget(m_shutdownDaemonBtn);
 
     appLayout->addLayout(topbar);
 
