@@ -276,6 +276,12 @@ install_app() {
         log "Models installed to /usr/local/share/k4w-models/"
     fi
 
+    # Setup OpenNI2 driver (symlink libFreenectDriver to OpenNI2 drivers dir)
+    if [ -d /usr/lib/OpenNI2-FreenectDriver ] && [ -d /usr/lib/OpenNI2/Drivers ]; then
+        sudo ln -sf /usr/lib/OpenNI2-FreenectDriver/libFreenectDriver.so /usr/lib/OpenNI2/Drivers/libFreenectDriver.so 2>/dev/null
+        log "OpenNI2 FreenectDriver linked"
+    fi
+
     log "Installation complete!"
     echo ""
     echo -e "${GREEN}═══════════════════════════════════════════════════${NC}"
